@@ -4,7 +4,9 @@ from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
 
-from excel_copy import AliasStore, WorkbookSession, normalize
+from excel_copy_script.aliases import AliasStore
+from excel_copy_script.utils import normalize
+from excel_copy_script.workbook import WorkbookSession
 
 
 class TransferTests(unittest.TestCase):

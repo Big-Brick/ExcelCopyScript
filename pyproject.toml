@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "excel-copy-script"
+version = "0.1.0"
+description = "GUI tool for transferring fields between Excel workbooks with persistent aliases"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["openpyxl>=3.1,<4"]
+
+[project.gui-scripts]
+excel-copy-script = "excel_copy_script.gui:main"
+
+[tool.setuptools.packages.find]
+include = ["excel_copy_script*"]

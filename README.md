@@ -23,9 +23,38 @@ sudo apt install python3-tk python3-venv
 
 ~~~bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/python excel_copy.py
+.venv/bin/pip install -e .
+.venv/bin/python -m excel_copy_script
 ~~~
+
+Альтернативно, після встановлення пакета:
+
+~~~bash
+.venv/bin/excel-copy-script
+~~~
+
+Старий спосіб запуску `.venv/bin/python excel_copy.py` теж працює.
+
+## Структура проєкту
+
+~~~text
+excel_copy.py                     # Сумісна точка входу для старого запуску
+pyproject.toml                    # Метадані пакета, залежності й GUI-команда
+excel_copy_script/
+  __init__.py                     # Публічні імпорти без ініціалізації GUI
+  __main__.py                     # Запуск через python -m
+  config.py                       # Назви аркушів і координати
+  models.py                       # Моделі параметрів та результату імпорту
+  utils.py                        # Нормалізація назв і перевірка значень
+  aliases.py                      # Персистентне збереження аліасів
+  workbook.py                     # Читання, зіставлення і запис Excel
+  gui.py                          # Tkinter-інтерфейс і обробники кнопок
+tests/
+  test_engine.py                  # Тести імпорту та аліасів
+  test_package.py                 # Перевірка структури й точок входу
+~~~
+
+Бізнес-логіка у `workbook.py` не залежить від Tkinter; GUI лише викликає її методи.
 
 ## Важливі особливості
 

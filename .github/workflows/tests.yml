@@ -15,10 +15,13 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: |
-          python -m pip install -r requirements.txt
           sudo apt-get update
           sudo apt-get install -y python3-tk
+          python -m pip install -e .
       - name: Compile and run tests
         run: |
-          python -m py_compile excel_copy.py
+          python -m compileall -q excel_copy.py excel_copy_script tests
           python -m unittest discover -s tests -v
+      - name: Verify installed entry point
+        run: |
+          python -c 'from importlib.metadata import distribution; d = distribution("excel-copy-script"); assert any(e.name == "excel-copy-script" and e.value == "excel_copy_script.gui:main" for e in d.entry_points)'
