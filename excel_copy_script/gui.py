@@ -13,6 +13,7 @@ from .aliases import AliasStore
 from .config import FILE_TYPES
 from .gui_layout import LayoutPersistence
 from .models import AliasEntry, CopyRecord, SourceField
+from .new_profile_dialog import NewProfileDialog
 from .recent_directories import RecentDirectories
 from .profiles import Profile, ProfileManager
 from .profile_migrations import build_profile_from_legacy
@@ -104,6 +105,9 @@ class ExcelCopyApp(tk.Tk):
         ttk.Label(profile_bar, textvariable=self.profile_var).pack(
             side="left", fill="x", expand=True, padx=(6, 12),
         )
+        ttk.Button(
+            profile_bar, text="Новий профіль…", command=self.create_profile,
+        ).pack(side="left", padx=(0, 8))
         ttk.Button(
             profile_bar, text="Відкрити профіль…", command=self.open_profile,
         ).pack(side="left")
@@ -455,6 +459,24 @@ class ExcelCopyApp(tk.Tk):
             self.status_var.set(
                 "Профіль змінено. Підсумковий файл не змінено; "
                 "список попередніх вхідних файлів збережено для повного перезапуску."
+            )
+
+    def create_profile(self) -> None:
+        """Create an empty profile from custom workbook layout settings."""
+        dialog = NewProfileDialog(
+            self, self.profile_manager.config_dir / "profiles",
+        )
+        self.wait_window(dialog)
+        if dialog.profile is None:
+            return
+        try:
+            self._activate_profile(dialog.profile)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror(
+                "Профіль створено, але не активовано",
+                f"Файл «{dialog.profile.path}» створено. "
+                f"Не вдалося його активувати: {exc}",
+                parent=self,
             )
 
     def open_profile(self) -> None:

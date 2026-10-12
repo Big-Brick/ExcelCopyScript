@@ -157,6 +157,45 @@ class ProfileTests(unittest.TestCase):
         self.assertIsNone(session.sheet["C8"].value)
         self.assertEqual(session.sheet["B8"].value, "keep")
 
+    def test_create_empty_profile_is_independent_from_existing_aliases(self):
+        first = self.manager.load_last()
+        from excel_copy_script.models import DestinationField, SourceField
+        AliasStore.from_profile(first).set(
+            "original", SourceField(4, "Old", 1), DestinationField(2, "Data"),
+        )
+        destination = self.home / "new-blank.json"
+        layout = WorkbookLayout(
+            destination_sheet="Custom", header_row=5, first_data_row=7,
+            first_destination_column=4, source_name_column=2,
+            first_source_row=6, source_value_first_column=3,
+            source_value_last_column=5, preferred_source_sheet="Source",
+        )
+        new_profile = Profile.create_empty(destination, layout)
+        self.assertEqual(new_profile.aliases_data["templates"], {})
+        self.assertEqual(new_profile.layout, layout)
+        self.assertEqual(Profile.load(destination).aliases_data["templates"], {})
+        self.assertIn(
+            "original", Profile.load(first.path).aliases_data["templates"],
+        )
+        self.manager.remember(new_profile)
+        self.assertEqual(self.manager.load_last().path, destination.resolve())
+
+    def test_create_empty_profile_refuses_existing_file_without_changing_it(self):
+        existing = self.home / "existing.json"
+        existing.write_text('{"custom": true}', encoding="utf-8")
+        before = existing.read_bytes()
+        with self.assertRaises(FileExistsError):
+            Profile.create_empty(existing)
+        self.assertEqual(existing.read_bytes(), before)
+
+    def test_create_empty_profile_validates_layout_before_writing(self):
+        target = self.home / "bad.json"
+        with self.assertRaisesRegex(ValueError, "Перший рядок даних"):
+            Profile.create_empty(
+                target, WorkbookLayout(header_row=8, first_data_row=7),
+            )
+        self.assertFalse(target.exists())
+
     def test_malformed_layout_rejected(self):
         p = self.manager.load_last()
         data = json.loads(p.path.read_text())

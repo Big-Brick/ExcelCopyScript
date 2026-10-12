@@ -53,6 +53,34 @@ class Profile:
         self._needs_save = migrated
 
     @classmethod
+    def create_empty(
+        cls, path: Path, layout: WorkbookLayout | None = None,
+    ) -> "Profile":
+        """Create an independent profile with no aliases, without replacing files.
+
+        Unlike save(), creation is exclusive: two concurrent windows cannot
+        overwrite an existing profile even if both checked its path first.
+        """
+        config = layout if layout is not None else WorkbookLayout()
+        profile = cls(path, {
+            "profile_version": PROFILE_VERSION,
+            "layout": config.to_dict(),
+            "aliases": {"version": CURRENT_VERSION, "templates": {}},
+        })
+        profile.path.parent.mkdir(parents=True, exist_ok=True)
+        created = False
+        try:
+            with profile.path.open("x", encoding="utf-8") as stream:
+                created = True
+                json.dump(profile.data, stream, ensure_ascii=False, indent=2)
+                stream.write("\n")
+        except Exception:
+            if created:
+                profile.path.unlink(missing_ok=True)
+            raise
+        return profile
+
+    @classmethod
     def load(cls, path: Path) -> "Profile":
         path = Path(path).expanduser()
         try:
