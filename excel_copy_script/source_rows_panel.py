@@ -113,7 +113,11 @@ class SourceRowsPanel(ttk.Frame):
             return
         self._syncing_scroll = True
         try:
-            other.yview_moveto(float(first))
+            # Both Treeviews call this callback. Avoid resetting the peer's
+            # viewport to the same position: redundant updates may recurse.
+            position = float(first)
+            if abs(other.yview()[0] - position) > 1e-6:
+                other.yview_moveto(position)
         finally:
             self._syncing_scroll = False
 
@@ -122,14 +126,18 @@ class SourceRowsPanel(ttk.Frame):
             return
         self._syncing_selection = True
         try:
-            items = current.selection()
-            if items:
-                other.selection_set(items[0])
-                other.see(items[0])
-            else:
-                previous = other.selection()
-                if previous:
-                    other.selection_remove(*previous)
+            selected = current.selection()
+            # Tk's <<TreeviewSelect>> is queued and delivered *after* the
+            # handler returns. A synchronous reentrancy flag alone therefore
+            # cannot prevent an endless selection event ping-pong.
+            #
+            # selection_set() emits another event even when the selection
+            # is unchanged, so touch the peer only if the two selections differ.
+            if other.selection() != selected:
+                if selected:
+                    other.selection_set(selected[0])
+                else:
+                    other.selection_remove(*other.selection())
         finally:
             self._syncing_selection = False
         self._notify_selection()
