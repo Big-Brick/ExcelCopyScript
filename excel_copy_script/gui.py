@@ -8,7 +8,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from .alias_dialog import AliasManagerDialog
 from .aliases import AliasStore
-from .config import FILE_TYPES
+from .config import FILE_TYPES, SOURCE_SHEET
 from .recent_directories import RecentDirectories
 from .utils import present
 from .workbook import WorkbookSession
@@ -22,6 +22,7 @@ class ExcelCopyApp(tk.Tk):
         self.session: WorkbookSession | None = None
         self.aliases: AliasStore | None = None
         self._unmatched_source_ids: dict[str, tuple[str, int]] = {}
+        self.selected_source_sheet = tk.StringVar(value="")
         self.recent_directories = RecentDirectories()
         self.destination_var = tk.StringVar(value="Підсумковий файл не вибрано")
         self.source_var = tk.StringVar(value="Вхідний файл не вибрано")
@@ -51,7 +52,8 @@ class ExcelCopyApp(tk.Tk):
             panes, "Без відповідника: вихідні стовпчики", ("Колонка", "Назва"), (80, 260))
         source_frame, self.source_tree = self._make_table(
             panes, "Без відповідника: вхідні рядки",
-            ("Аркуш", "Рядок", "Назва", "Значення"), (130, 70, 200, 110))
+            ("Рядок", "Назва", "Значення"), (70, 240, 130),
+            with_sheet_selector=True)
         for frame in (copied_frame, destination_frame, source_frame):
             panes.add(frame, weight=1)
 
@@ -66,9 +68,19 @@ class ExcelCopyApp(tk.Tk):
         self.destination_tree.bind("<<TreeviewSelect>>", self._on_selection)
         self.source_tree.bind("<<TreeviewSelect>>", self._on_selection)
 
-    def _make_table(self, parent, title, headings, widths):
+    def _make_table(self, parent, title, headings, widths, with_sheet_selector=False):
         frame = ttk.Frame(parent, padding=4)
         ttk.Label(frame, text=title, font=("", 10, "bold")).pack(anchor="w", pady=(0, 5))
+        if with_sheet_selector:
+            selector = ttk.Frame(frame)
+            selector.pack(fill="x", pady=(0, 6))
+            ttk.Label(selector, text="Аркуш:").pack(side="left")
+            self.source_sheet_combo = ttk.Combobox(
+                selector, textvariable=self.selected_source_sheet,
+                state="disabled", width=26,
+            )
+            self.source_sheet_combo.pack(side="left", fill="x", expand=True, padx=(8, 0))
+            self.source_sheet_combo.bind("<<ComboboxSelected>>", self._on_source_sheet_changed)
         container = ttk.Frame(frame)
         container.pack(fill="both", expand=True)
         tree = ttk.Treeview(container, columns=headings, show="headings", selectmode="browse")
@@ -115,6 +127,7 @@ class ExcelCopyApp(tk.Tk):
         self.source_var.set("Вхідний файл не вибрано")
         self.source_button.configure(state="normal")
         self.alias_button.configure(state="normal")
+        self._set_source_sheets([])
         self._clear_tables()
         self.status_var.set(f"Знайдено {len(session.fields)} стовпчиків. Наступний рядок: {session.next_empty_row()}.")
 
@@ -143,7 +156,37 @@ class ExcelCopyApp(tk.Tk):
             return
         self._remember_directory("source", chosen)
         self.source_var.set(f"Вхідний: {chosen} → рядок {result.row}")
+        self._set_source_sheets(result.sheets)
         self._refresh_tables()
+
+    def _set_source_sheets(self, sheets: list[str]) -> None:
+        """Populate the selector with every worksheet, including sheets without matches."""
+        self.source_sheet_combo.configure(
+            values=sheets, state="readonly" if sheets else "disabled",
+        )
+        self.selected_source_sheet.set(
+            SOURCE_SHEET if SOURCE_SHEET in sheets else (sheets[0] if sheets else "")
+        )
+
+    def _on_source_sheet_changed(self, _event=None) -> None:
+        self._refresh_source_rows()
+
+    def _refresh_source_rows(self) -> None:
+        """Update only the source table; keep the destination selection intact."""
+        self._unmatched_source_ids.clear()
+        self.source_tree.delete(*self.source_tree.get_children())
+        result = self.session.current if self.session is not None else None
+        if result is not None:
+            selected = self.selected_source_sheet.get()
+            for source in result.unmatched_sources:
+                if source.sheet != selected:
+                    continue
+                item_id = self.source_tree.insert(
+                    "", "end",
+                    values=(source.row, source.name, present(source.value)),
+                )
+                self._unmatched_source_ids[item_id] = (source.sheet, source.row)
+        self._on_selection()
 
     def _clear_tables(self):
         self._unmatched_source_ids.clear()
@@ -161,12 +204,7 @@ class ExcelCopyApp(tk.Tk):
                 f"{record.destination.letter}: {record.destination.name}", present(record.source.value), record.method))
         for dest in result.unmatched_destinations:
             self.destination_tree.insert("", "end", iid=str(dest.column), values=(dest.letter, dest.name))
-        for source in result.unmatched_sources:
-            item_id = self.source_tree.insert(
-                "", "end",
-                values=(source.sheet, source.row, source.name, present(source.value)),
-            )
-            self._unmatched_source_ids[item_id] = (source.sheet, source.row)
+        self._refresh_source_rows()
         status = (f"{result.filename} → рядок {result.row}. Скопійовано: {len(result.copied)}; "
                   f"не зіставлено вихідних стовпчиків: {len(result.unmatched_destinations)}; "
                   f"вхідних рядків: {len(result.unmatched_sources)}. Зміни автоматично збережено.")

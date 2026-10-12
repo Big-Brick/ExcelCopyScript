@@ -44,6 +44,16 @@ class MultiSheetTests(unittest.TestCase):
         book.save(path)
         return path
 
+    def test_source_sheet_list_includes_empty_worksheets(self):
+        path = self.make_input("empty_sheet.xlsx", {
+            SOURCE_SHEET: [(1, "Техніка", 5)],
+            "Без даних": [],
+            "Склад": [(2, "Неоднозначне", 12)],
+        })
+        result = self.session.open_input(path)
+        self.assertEqual(result.sheets, [SOURCE_SHEET, "Без даних", "Склад"])
+        self.assertEqual([s.sheet for s in result.unmatched_sources], ["Склад"])
+
     def test_only_summary_sheet_uses_exact_header_match(self):
         filename = self.make_input("exact.xlsx", {
             SOURCE_SHEET: [(1, "Техніка", 5)],
@@ -151,6 +161,131 @@ class MultiSheetTests(unittest.TestCase):
         session.copy_manually.return_value = None
         ExcelCopyApp.copy_selected(app)
         session.copy_manually.assert_called_once_with(3, 4, sheet="Склад")
+
+
+
+class SheetSelectorTests(unittest.TestCase):
+    """Test sheet filtering without requiring an X server."""
+
+    class FakeVar:
+        def __init__(self):
+            self.value = ""
+
+        def set(self, value):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+    class FakeTree:
+        def __init__(self):
+            self.rows = {}
+            self.selected = ()
+            self.counter = 0
+
+        def get_children(self):
+            return list(self.rows)
+
+        def delete(self, *items):
+            for item in items:
+                self.rows.pop(item, None)
+            self.selected = ()
+
+        def insert(self, _parent, _position, values):
+            self.counter += 1
+            item_id = f"row{self.counter}"
+            self.rows[item_id] = tuple(values)
+            return item_id
+
+        def selection(self):
+            return self.selected
+
+    def make_ui(self, result):
+        app = SimpleNamespace(
+            session=SimpleNamespace(current=result),
+            _unmatched_source_ids={},
+            selected_source_sheet=self.FakeVar(),
+            source_sheet_combo=Mock(),
+            source_tree=self.FakeTree(),
+            _on_selection=Mock(),
+        )
+        app._refresh_source_rows = lambda: ExcelCopyApp._refresh_source_rows(app)
+        return app
+
+    def test_filter_and_sheet_change_only_refreshes_source_rows(self):
+        from excel_copy_script.models import ImportResult
+
+        result = ImportResult(filename="file.xlsx", row=4, sheets=[
+            SOURCE_SHEET, "Склад", "Порожній",
+        ], unmatched_sources=[
+            SourceField(2, "Перший", 11, sheet=SOURCE_SHEET),
+            SourceField(2, "Другий", 22, sheet="Склад"),
+            SourceField(3, "Третій", 33, sheet="Склад"),
+        ])
+        app = self.make_ui(result)
+        ExcelCopyApp._set_source_sheets(app, result.sheets)
+        app.source_sheet_combo.configure.assert_called_with(
+            values=[SOURCE_SHEET, "Склад", "Порожній"], state="readonly",
+        )
+        self.assertEqual(app.selected_source_sheet.get(), SOURCE_SHEET)
+        ExcelCopyApp._refresh_source_rows(app)
+        self.assertEqual(list(app.source_tree.rows.values()), [(2, "Перший", "11")])
+        app.selected_source_sheet.set("Склад")
+        ExcelCopyApp._on_source_sheet_changed(app)
+        self.assertEqual(list(app.source_tree.rows.values()), [
+            (2, "Другий", "22"), (3, "Третій", "33"),
+        ])
+        self.assertEqual(set(app._unmatched_source_ids.values()), {
+            ("Склад", 2), ("Склад", 3),
+        })
+        self.assertEqual(app.source_tree.selection(), ())
+        app.selected_source_sheet.set("Порожній")
+        ExcelCopyApp._on_source_sheet_changed(app)
+        self.assertEqual(app.source_tree.rows, {})
+        self.assertEqual(app._unmatched_source_ids, {})
+        self.assertGreaterEqual(app._on_selection.call_count, 3)
+
+    def test_manual_copy_uses_correct_sheet_after_selection(self):
+        from excel_copy_script.models import ImportResult
+
+        result = ImportResult(filename="file.xlsx", row=4, sheets=[
+            SOURCE_SHEET, "Склад",
+        ], unmatched_sources=[
+            SourceField(2, "Спільне", 1, sheet=SOURCE_SHEET),
+            SourceField(2, "Спільне", 2, sheet="Склад"),
+        ])
+        app = self.make_ui(result)
+        session = Mock()
+        session.current = result
+        session.copy_manually.return_value = None
+        app.session = session
+        app.destination_tree = Mock()
+        app.destination_tree.selection.return_value = ("3",)
+        app._refresh_tables = Mock()
+        ExcelCopyApp._set_source_sheets(app, result.sheets)
+        app.selected_source_sheet.set("Склад")
+        ExcelCopyApp._refresh_source_rows(app)
+        app.source_tree.selected = (next(iter(app.source_tree.rows)),)
+        ExcelCopyApp.copy_selected(app)
+        session.copy_manually.assert_called_once_with(2, 3, sheet="Склад")
+        app.selected_source_sheet.set(SOURCE_SHEET)
+        ExcelCopyApp._refresh_source_rows(app)
+        app.source_tree.selected = (next(iter(app.source_tree.rows)),)
+        ExcelCopyApp.copy_selected(app)
+        session.copy_manually.assert_called_with(2, 3, sheet=SOURCE_SHEET)
+
+    def test_selector_reset_for_another_workbook(self):
+        result = SimpleNamespace(sheets=[SOURCE_SHEET, "Склад"])
+        app = self.make_ui(result)
+        ExcelCopyApp._set_source_sheets(app, result.sheets)
+        app.selected_source_sheet.set("Склад")
+        ExcelCopyApp._set_source_sheets(app, [SOURCE_SHEET, "Поточний"])
+        self.assertEqual(app.selected_source_sheet.get(), SOURCE_SHEET)
+        ExcelCopyApp._set_source_sheets(app, [])
+        self.assertEqual(app.selected_source_sheet.get(), "")
+        app.source_sheet_combo.configure.assert_called_with(
+            values=[], state="disabled",
+        )
 
 
 class AliasMigrationTests(unittest.TestCase):

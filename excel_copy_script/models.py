@@ -65,3 +65,4 @@ class ImportResult:
     unmatched_destinations: list[DestinationField] = field(default_factory=list)
     unmatched_sources: list[SourceField] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    sheets: list[str] = field(default_factory=list)

@@ -56,7 +56,7 @@ class WorkbookSession:
                 return row
         return max(FIRST_DATA_ROW, self.sheet.max_row + 1)
 
-    def _read_source(self, path: Path) -> tuple[list[SourceField], list[str]]:
+    def _read_source(self, path: Path) -> tuple[list[SourceField], list[str], list[str]]:
         if path.suffix.lower() != ".xlsx":
             raise ValueError("Підтримуються лише файли .xlsx")
         if path.resolve() == self.path.resolve():
@@ -90,7 +90,7 @@ class WorkbookSession:
                             )
                         continue
                     entries.append(SourceField(row, name.strip(), cached_value, sheet=sheet_name))
-            return entries, warnings
+            return entries, warnings, sheet_names
         finally:
             cached.close()
             if formulas is not None:
@@ -151,7 +151,7 @@ class WorkbookSession:
                 tmp_path.unlink(missing_ok=True)
 
     def open_input(self, path: Path) -> ImportResult:
-        source_fields, warnings = self._read_source(Path(path))
+        source_fields, warnings, sheet_names = self._read_source(Path(path))
         target_row = self.next_empty_row()
         duplicates = Counter((field.sheet.casefold(), field.key) for field in source_fields)
         proposals: dict[int, list[CopyRecord]] = defaultdict(list)
@@ -165,7 +165,7 @@ class WorkbookSession:
         safe_matches.sort(key=lambda rec: rec.destination.column)
         self._write(target_row, safe_matches)
         result = ImportResult(filename=Path(path).name, row=target_row, copied=safe_matches,
-                              warnings=warnings)
+                              warnings=warnings, sheets=sheet_names)
         if any(count > 1 for count in duplicates.values()):
             result.warnings.append("Повторювані назви у вхідному файлі не зіставлено автоматично")
         if any(len(matches) > 1 for matches in proposals.values()):
