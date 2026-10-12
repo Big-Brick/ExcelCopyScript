@@ -153,6 +153,7 @@ class MultiSheetTests(unittest.TestCase):
         session = Mock()
         source = SourceField(3, "Показник", 42, sheet="Склад")
         session.current.unmatched_sources = [source]
+        session.current.unmatched_destinations = [DestinationField(4, "Резерв")]
         app = SimpleNamespace(
             session=session,
             create_sources=Mock(
@@ -329,6 +330,7 @@ class SheetSelectorTests(unittest.TestCase):
         create.source_column = Mock(return_value=5)
         session = Mock()
         session.current.unmatched_sources = [source]
+        session.current.unmatched_destinations = [DestinationField(3, "Техніка")]
         session.copy_manually.return_value = None
         app = SimpleNamespace(
             session=session, create_sources=create, review_sources=review,

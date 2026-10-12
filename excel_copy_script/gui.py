@@ -84,13 +84,15 @@ class ExcelCopyApp(tk.Tk):
         ).pack(anchor="w")
         self.copied_tree.bind("<<TreeviewSelect>>", self._on_copied_selection)
 
-        # Creation: destination fields + unmatched source rows.
+        # Creation: all destination fields + all source rows; completed
+        # destinations are visible for context but cannot be selected for copying.
         create_panes = ttk.Panedwindow(create_tab, orient="horizontal")
         create_panes.pack(fill="both", expand=True)
         destination_frame, self.destination_tree = self._make_table(
-            create_panes, "Без відповідника: вихідні стовпчики",
-            ("Колонка", "Назва"), (80, 260),
+            create_panes, "Вихідні стовпчики",
+            ("Колонка", "Назва", "Джерело значення"), (80, 220, 320),
         )
+        self.destination_tree.tag_configure("filled", background="#ddf2df")
         self.create_sources = SourceRowsPanel(
             create_panes, on_selection_changed=self._on_selection,
         )
@@ -136,6 +138,9 @@ class ExcelCopyApp(tk.Tk):
         can_copy = bool(
             self.session and self.session.current
             and self.destination_tree.selection()
+            and int(self.destination_tree.selection()[0]) in {
+                field.column for field in self.session.current.unmatched_destinations
+            }
             and (source := self.create_sources.selected_source()) is not None
             and source.eligible
             and source.location in {
@@ -226,6 +231,7 @@ class ExcelCopyApp(tk.Tk):
         self.alias_button.configure(state="normal")
         self._set_source_sheets([])
         self._clear_tables()
+        self._refresh_destination_rows()
         self.status_var.set(
             f"Знайдено {len(session.fields)} стовпчиків. "
             f"Наступний рядок: {session.next_empty_row()}."
@@ -293,6 +299,34 @@ class ExcelCopyApp(tk.Tk):
                 )
         self._on_copied_selection()
 
+    def _refresh_destination_rows(self) -> None:
+        """Show every output column, marking values copied in the current import."""
+        self.destination_tree.delete(*self.destination_tree.get_children())
+        if self.session is None:
+            self._on_selection()
+            return
+
+        result = self.session.current
+        copies = {
+            record.destination.column: record
+            for record in result.copied
+        } if result is not None else {}
+        for destination in self.session.fields:
+            record = copies.get(destination.column)
+            origin = ""
+            if record is not None:
+                source = record.source
+                origin = (
+                    f"{source.sheet}!{get_column_letter(source.value_column)}"
+                    f"{source.row}: {source.name}"
+                )
+            self.destination_tree.insert(
+                "", "end", iid=str(destination.column),
+                values=(destination.letter, destination.name, origin),
+                tags=("filled",) if record is not None else (),
+            )
+        self._on_selection()
+
     def _refresh_source_panels(self) -> None:
         result = self.session.current if self.session is not None else None
         rows = result.all_sources if result is not None else []
@@ -306,10 +340,7 @@ class ExcelCopyApp(tk.Tk):
             return
         result = self.session.current
         self._refresh_copied()
-        for dest in result.unmatched_destinations:
-            self.destination_tree.insert(
-                "", "end", iid=str(dest.column), values=(dest.letter, dest.name),
-            )
+        self._refresh_destination_rows()
         self._refresh_source_panels()
         self._on_selection()
         status = (
@@ -328,6 +359,10 @@ class ExcelCopyApp(tk.Tk):
         destinations = self.destination_tree.selection()
         if source is None or not destinations:
             return
+        if int(destinations[0]) not in {
+            field.column for field in self.session.current.unmatched_destinations
+        }:
+            return  # Already copied; visible for context, but not writable again.
         if not source.eligible or source.location not in {
             row.location for row in self.session.current.unmatched_sources
         }:
