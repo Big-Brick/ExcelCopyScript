@@ -70,12 +70,14 @@ class AliasEntry:
     destination_column: int | None
     sheet: str = SOURCE_SHEET
     source_column: int = 3
+    source_row: int | None = None
 
 @dataclass(frozen=True)
 class CopyRecord:
     source: SourceField
     destination: DestinationField
     method: str
+    alias_row: int | None = None
 
 
 @dataclass

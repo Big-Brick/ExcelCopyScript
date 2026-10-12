@@ -32,7 +32,7 @@ class CreationTabHeightTests(unittest.TestCase):
         action = self.app.copy_button
         container = action.master
         children = container.winfo_children()
-        self.assertEqual(len(children), 2)
+        self.assertEqual(len(children), 3)
         self.assertEqual(action.pack_info()["side"], "left")
         self.assertEqual(children[1].pack_info()["side"], "left")
         # They should occupy one control strip, not two stacked rows.

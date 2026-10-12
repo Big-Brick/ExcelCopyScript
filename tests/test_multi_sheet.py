@@ -223,6 +223,7 @@ class MultiSheetTests(unittest.TestCase):
         session.current.unmatched_destinations = [DestinationField(4, "Резерв")]
         app = SimpleNamespace(
             session=session,
+            row_only_var=Mock(get=Mock(return_value=False)),
             create_sources=Mock(
                 selected_source=Mock(return_value=source),
                 source_column=Mock(return_value=3),
@@ -233,7 +234,7 @@ class MultiSheetTests(unittest.TestCase):
         session.copy_manually.return_value = None
         ExcelCopyApp.copy_selected(app)
         session.copy_manually.assert_called_once_with(
-            3, 4, sheet="Склад", source_column=3,
+            3, 4, sheet="Склад", source_column=3, alias_row=None,
         )
 
 
@@ -409,11 +410,14 @@ class SheetSelectorTests(unittest.TestCase):
         session.copy_manually.return_value = None
         app = SimpleNamespace(
             session=session, create_sources=create, review_sources=review,
+            row_only_var=Mock(get=Mock(return_value=False)),
             destination_tree=Mock(selection=Mock(return_value=("3",))),
             _refresh_tables=Mock(),
         )
         ExcelCopyApp.copy_selected(app)
-        session.copy_manually.assert_called_once_with(8, 3, sheet="Склад", source_column=5)
+        session.copy_manually.assert_called_once_with(
+            8, 3, sheet="Склад", source_column=5, alias_row=None,
+        )
         review.selected_source.assert_not_called()
 
 
@@ -444,7 +448,8 @@ class AliasReviewTests(unittest.TestCase):
             _refresh_source_panels=Mock(),
         )
         self.app._record_has_alias = lambda record: ExcelCopyApp._record_has_alias(self.app, record)
-        self.app._alias_for_source = lambda source: ExcelCopyApp._alias_for_source(self.app, source)
+        self.app._aliases_for_source = lambda source: ExcelCopyApp._aliases_for_source(self.app, source)
+        self.app._alias_for_source = lambda source, row=None: ExcelCopyApp._alias_for_source(self.app, source, row=row)
         self.app._delete_alias_entry = lambda entry: ExcelCopyApp._delete_alias_entry(self.app, entry)
         self.app._selected_copy_record = lambda: ExcelCopyApp._selected_copy_record(self.app)
         self.app._on_copied_selection = lambda: ExcelCopyApp._on_copied_selection(self.app)
@@ -510,14 +515,14 @@ class AliasMigrationTests(unittest.TestCase):
         encoded = json.dumps(original, ensure_ascii=False)
         self.path.write_text(encoded, encoding="utf-8")
         store = AliasStore(self.path)
-        self.assertEqual(store.data["version"], 3)
+        self.assertEqual(store.data["version"], 4)
         self.assertEqual(store.get("template-1", "Кількість", SOURCE_SHEET)["column"], 2)
         self.assertIsNone(store.get("template-1", "Кількість", "Склад"))
         self.assertEqual(store.get("template-2", "Інша назва", SOURCE_SHEET)["column"], 3)
         self.assertEqual(store.list_for_template("template-1")[0].sheet, SOURCE_SHEET)
         backup = self.directory / "aliases.json.v1.bak"
         self.assertEqual(backup.read_text(encoding="utf-8"), encoded)
-        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["version"], 3)
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["version"], 4)
         AliasStore(self.path)
         self.assertEqual(backup.read_text(encoding="utf-8"), encoded)
 
@@ -547,7 +552,7 @@ class AliasMigrationTests(unittest.TestCase):
         self.assertIsNone(restarted.aliases.get(current_id, "Нове ім’я", SOURCE_SHEET))
 
     def test_invalid_schema_is_rejected_without_overwriting(self):
-        text = '{"version": 4, "templates": {}}'
+        text = '{"version": 5, "templates": {}}'
         self.path.write_text(text, encoding="utf-8")
         with self.assertRaises(ValueError):
             AliasStore(self.path)

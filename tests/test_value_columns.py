@@ -152,12 +152,12 @@ class SourceColumnTests(unittest.TestCase):
         original = json.dumps(old, ensure_ascii=False)
         self.alias_file.write_text(original, encoding="utf-8")
         updated = AliasStore(self.alias_file)
-        self.assertEqual(updated.data["version"], 3)
+        self.assertEqual(updated.data["version"], 4)
         self.assertEqual(updated.get(self.session.template_id, "Старе")["source_column"], 3)
         self.assertEqual(updated.get(self.session.template_id, "Інше", "Склад")["source_column"], 3)
         self.assertEqual(updated.list_for_template(self.session.template_id)[0].source_column, 3)
         self.assertEqual((self.folder / "aliases.json.v2.bak").read_text(encoding="utf-8"), original)
-        self.assertEqual(AliasStore(self.alias_file).data["version"], 3)
+        self.assertEqual(AliasStore(self.alias_file).data["version"], 4)
 
     def test_legacy_v1_migration_sets_c(self):
         old = {"version": 1, "templates": {self.session.template_id: {

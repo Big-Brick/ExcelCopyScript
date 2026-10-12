@@ -1,4 +1,4 @@
-"""Read, write and migrate sheet-scoped aliases for a destination template."""
+"""Read, write and migrate sheet- and optional row-scoped aliases."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from .utils import normalize
 
 
 class AliasStore:
-    """Aliases indexed by destination template, source sheet and parameter."""
+    """Aliases indexed by template, sheet, name and optional source row."""
 
     def __init__(self, path: Path | None = None):
         self.path = path or (Path.home() / ".config" / "excel-copy-script" / "aliases.json")
@@ -43,27 +43,67 @@ class AliasStore:
         headers = sorted(field.key for field in fields)
         return hashlib.sha256(json.dumps(headers, ensure_ascii=False).encode("utf-8")).hexdigest()
 
-    def get(self, template_id: str, source_name: str, sheet: str = SOURCE_SHEET) -> dict | None:
-        entry = (self.data["templates"].get(template_id, {})
+    @staticmethod
+    def _check_row(row: int | None) -> None:
+        if row is not None and (type(row) is not int or row < 1):
+            raise ValueError("Номер рядка аліаса має бути додатним цілим числом")
+
+    def _group(self, template_id: str, source_name: str, sheet: str) -> dict | None:
+        group = (self.data["templates"].get(template_id, {})
                  .get(normalize(sheet), {}).get(normalize(source_name)))
-        return entry if isinstance(entry, dict) else None
+        return group if isinstance(group, dict) else None
+
+    def get_exact(
+        self, template_id: str, source_name: str,
+        sheet: str = SOURCE_SHEET, row: int | None = None,
+    ) -> dict | None:
+        """Retrieve precisely the requested general or row-scoped alias."""
+        self._check_row(row)
+        group = self._group(template_id, source_name, sheet)
+        if group is None:
+            return None
+        record = group.get("default") if row is None else group.get("rows", {}).get(str(row))
+        return record if isinstance(record, dict) else None
+
+    def get(
+        self, template_id: str, source_name: str,
+        sheet: str = SOURCE_SHEET, row: int | None = None,
+    ) -> dict | None:
+        """Match row-specific first, then fall back to the general alias."""
+        if row is not None:
+            scoped = self.get_exact(template_id, source_name, sheet, row)
+            if scoped is not None:
+                return scoped
+        return self.get_exact(template_id, source_name, sheet)
 
     def list_for_template(self, template_id: str) -> list[AliasEntry]:
-        """List alias mappings from every sheet for the current destination template."""
+        """Include both general and row-specific mappings from all sheets."""
         entries = []
         for sheet_key, mappings in self.data["templates"].get(template_id, {}).items():
-            for source_key, record in mappings.items():
-                if not isinstance(record, dict):
+            for source_key, group in mappings.items():
+                if not isinstance(group, dict):
                     continue
-                entries.append(AliasEntry(
-                    source_key=source_key,
-                    source_name=record.get("source_name") or source_key,
-                    destination_key=record.get("header", ""),
-                    destination_column=record.get("column"),
-                    sheet=record.get("sheet_name") or sheet_key,
-                    source_column=record.get("source_column", 3),
-                ))
-        return sorted(entries, key=lambda e: (e.sheet.casefold(), e.source_name.casefold()))
+                records = [(None, group.get("default"))]
+                records.extend(
+                    (int(row), entry)
+                    for row, entry in group.get("rows", {}).items()
+                )
+                for row, record in records:
+                    if not isinstance(record, dict):
+                        continue
+                    entries.append(AliasEntry(
+                        source_key=source_key,
+                        source_name=record.get("source_name") or source_key,
+                        destination_key=record.get("header", ""),
+                        destination_column=record.get("column"),
+                        sheet=record.get("sheet_name") or sheet_key,
+                        source_column=record.get("source_column", 3),
+                        source_row=row,
+                    ))
+        return sorted(entries, key=lambda e: (
+            e.sheet.casefold(), e.source_name.casefold(),
+            e.source_row is not None, e.source_row or 0,
+        ))
 
     def migrate_legacy_template(
         self, legacy_id: str, current_id: str, fields: list[DestinationField]
@@ -83,15 +123,26 @@ class AliasStore:
         valid: dict[str, dict] = {}
         for sheet_key, entries in old.items():
             valid_entries = {}
-            for source_key, record in entries.items():
-                if not isinstance(record, dict) or record.get("column") == 1:
+            for source_key, group in entries.items():
+                if not isinstance(group, dict):
                     continue
-                candidates = [field for field in fields if field.key == record.get("header")]
-                if len(candidates) == 1 or (
-                    len(candidates) > 1
-                    and any(field.column == record.get("column") for field in candidates)
-                ):
-                    valid_entries[source_key] = record
+                def valid_record(record):
+                    if not isinstance(record, dict) or record.get("column") == 1:
+                        return False
+                    candidates = [field for field in fields if field.key == record.get("header")]
+                    return len(candidates) == 1 or (
+                        len(candidates) > 1
+                        and any(field.column == record.get("column") for field in candidates)
+                    )
+                general = group.get("default")
+                rows = group.get("rows", {})
+                filtered_rows = {row: record for row, record in rows.items()
+                                 if valid_record(record)}
+                if valid_record(general) or filtered_rows:
+                    valid_entries[source_key] = {
+                        "default": general if valid_record(general) else None,
+                        "rows": filtered_rows,
+                    }
             if valid_entries:
                 valid[sheet_key] = valid_entries
 
@@ -113,47 +164,65 @@ class AliasStore:
                 templates[current_id] = original_current
             raise
 
-    def delete(self, template_id: str, source_name: str, sheet: str = SOURCE_SHEET) -> bool:
-        """Delete only the selected (sheet, parameter) alias."""
+    def delete(
+        self, template_id: str, source_name: str,
+        sheet: str = SOURCE_SHEET, row: int | None = None,
+    ) -> bool:
+        """Delete only one exact alias; never erase its sibling variant."""
+        self._check_row(row)
         templates = self.data["templates"]
-        template = templates.get(template_id)
         sheet_key, source_key = normalize(sheet), normalize(source_name)
-        if not template or source_key not in template.get(sheet_key, {}):
+        group = self._group(template_id, source_name, sheet)
+        if group is None or self.get_exact(template_id, source_name, sheet, row) is None:
             return False
-        mappings = template[sheet_key]
-        old = mappings.pop(source_key)
-        if not mappings:
-            del template[sheet_key]
-        if not template:
-            del templates[template_id]
+        # Copy containers for rollback if saving fails.
+        import copy
+        snapshot = copy.deepcopy(templates.get(template_id))
+        if row is None:
+            group["default"] = None
+        else:
+            group["rows"].pop(str(row))
+        if group.get("default") is None and not group["rows"]:
+            del templates[template_id][sheet_key][source_key]
+            if not templates[template_id][sheet_key]:
+                del templates[template_id][sheet_key]
+            if not templates[template_id]:
+                del templates[template_id]
         try:
             self._save()
         except Exception:
-            templates.setdefault(template_id, {}).setdefault(sheet_key, {})[source_key] = old
+            templates[template_id] = snapshot
             raise
         return True
 
-    def set(self, template_id: str, source: SourceField, destination: DestinationField) -> None:
+    def set(
+        self, template_id: str, source: SourceField,
+        destination: DestinationField, row: int | None = None,
+    ) -> None:
+        """Save a general alias or one restricted to a specific row."""
+        self._check_row(row)
         sheet_key, source_key = normalize(source.sheet), source.key
-        template = self.data["templates"].setdefault(template_id, {})
-        mappings = template.setdefault(sheet_key, {})
-        old = mappings.get(source_key)
-        mappings[source_key] = {
+        templates = self.data["templates"]
+        import copy
+        snapshot = copy.deepcopy(templates.get(template_id))
+        mappings = templates.setdefault(template_id, {}).setdefault(sheet_key, {})
+        group = mappings.setdefault(source_key, {"default": None, "rows": {}})
+        record = {
             "header": destination.key, "column": destination.column,
             "source_name": source.name, "sheet_name": source.sheet,
             "source_column": source.value_column,
         }
+        if row is None:
+            group["default"] = record
+        else:
+            group["rows"][str(row)] = record
         try:
             self._save()
         except Exception:
-            if old is None:
-                del mappings[source_key]
-                if not mappings:
-                    del template[sheet_key]
-                if not template:
-                    del self.data["templates"][template_id]
+            if snapshot is None:
+                templates.pop(template_id, None)
             else:
-                mappings[source_key] = old
+                templates[template_id] = snapshot
             raise
 
     def _save(self) -> None:

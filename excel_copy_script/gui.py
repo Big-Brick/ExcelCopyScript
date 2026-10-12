@@ -129,6 +129,11 @@ class ExcelCopyApp(tk.Tk):
         # Put the hint next to the action instead of using a second row.
         # This leaves more height for the source/destination Treeviews.
         self.copy_button.pack(side="left")
+        self.row_only_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            create_actions, text="Аліас лише для цього рядка",
+            variable=self.row_only_var,
+        ).pack(side="left", padx=(12, 0))
         ttk.Label(
             create_actions,
             text="Виберіть вихідний стовпчик, вхідний рядок і колонку значення C–G.",
@@ -221,8 +226,9 @@ class ExcelCopyApp(tk.Tk):
         """Only allow deleting an alias that resolves to this record's destination."""
         if self.aliases is None or self.session is None:
             return False
-        alias = self.aliases.get(
-            self.session.template_id, record.source.name, record.source.sheet,
+        alias = self.aliases.get_exact(
+            self.session.template_id, record.source.name,
+            record.source.sheet, row=record.alias_row,
         )
         if (not alias or alias.get("header") != record.destination.key
                 or alias.get("source_column", 3) != record.source.value_column):
@@ -235,13 +241,22 @@ class ExcelCopyApp(tk.Tk):
         enabled = record is not None and self._record_has_alias(record)
         self.delete_alias_button.configure(state="normal" if enabled else "disabled")
 
-    def _alias_for_source(self, source: SourceField) -> AliasEntry | None:
+    def _aliases_for_source(self, source: SourceField) -> list[AliasEntry]:
         if self.aliases is None or self.session is None:
-            return None
-        return next((
+            return []
+        return [
             entry for entry in self.aliases.list_for_template(self.session.template_id)
             if entry.source_key == source.key
             and entry.sheet.casefold() == source.sheet.casefold()
+            and (entry.source_row is None or entry.source_row == source.row)
+        ]
+
+    def _alias_for_source(
+        self, source: SourceField, row: int | None = None,
+    ) -> AliasEntry | None:
+        return next((
+            entry for entry in self._aliases_for_source(source)
+            if entry.source_row == row
         ), None)
 
     def _delete_alias_entry(self, entry: AliasEntry) -> None:
@@ -251,7 +266,8 @@ class ExcelCopyApp(tk.Tk):
         if not messagebox.askyesno(
             "Підтвердження видалення",
             f"Видалити аліас «{entry.sheet}!{entry.source_name}» "
-            f"[{get_column_letter(entry.source_column)}] → "
+            f"[{get_column_letter(entry.source_column)}]"
+            f"{' (рядок ' + str(entry.source_row) + ')' if entry.source_row else ''} → "
             f"«{entry.destination_key}»?\n\n"
             "Уже скопійовані значення Excel не зміняться.",
             parent=self,
@@ -259,7 +275,8 @@ class ExcelCopyApp(tk.Tk):
             return
         try:
             deleted = self.aliases.delete(
-                self.session.template_id, entry.source_key, sheet=entry.sheet,
+                self.session.template_id, entry.source_key,
+                sheet=entry.sheet, row=entry.source_row,
             )
         except (OSError, ValueError) as exc:
             messagebox.showerror("Помилка видалення аліаса", str(exc), parent=self)
@@ -289,6 +306,7 @@ class ExcelCopyApp(tk.Tk):
                 menu_label = (
                     f"{entry.sheet}!{entry.source_name} "
                     f"[{get_column_letter(entry.source_column)}]"
+                    f"{' (рядок ' + str(entry.source_row) + ')' if entry.source_row else ' (усі рядки)'}"
                 )
                 submenu.add_command(
                     label=menu_label,
@@ -306,9 +324,9 @@ class ExcelCopyApp(tk.Tk):
         source = self.create_sources.source_at(event.widget, event.y)
         if source is None:
             return
-        entry = self._alias_for_source(source)
-        if entry is not None:
-            self._popup_alias_menu([entry], event)
+        entries = self._aliases_for_source(source)
+        if entries:
+            self._popup_alias_menu(entries, event)
             return "break"
 
     def _show_destination_alias_menu(self, event):
@@ -327,7 +345,7 @@ class ExcelCopyApp(tk.Tk):
         record = self._selected_copy_record()
         if record is None or not self._record_has_alias(record):
             return
-        entry = self._alias_for_source(record.source)
+        entry = self._alias_for_source(record.source, row=record.alias_row)
         if entry is not None:
             self._delete_alias_entry(entry)
 
@@ -561,6 +579,7 @@ class ExcelCopyApp(tk.Tk):
             warning = self.session.copy_manually(
                 source.row, int(destinations[0]), sheet=source.sheet,
                 source_column=self.create_sources.source_column(),
+                alias_row=source.row if self.row_only_var.get() else None,
             )
         except Exception as exc:
             messagebox.showerror("Помилка копіювання", str(exc))

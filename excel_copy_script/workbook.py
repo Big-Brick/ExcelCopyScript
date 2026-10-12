@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
 from typing import Sequence
 
@@ -176,7 +176,7 @@ class WorkbookSession:
 
     def _alias_target_for(self, source: SourceField) -> tuple[DestinationField | None, int]:
         """Resolve only an explicitly saved alias, never an incidental name match."""
-        alias = self.aliases.get(self.template_id, source.name, source.sheet)
+        alias = self.aliases.get(self.template_id, source.name, source.sheet, row=source.row)
         if alias is None:
             return None, 3
         return (
@@ -204,7 +204,7 @@ class WorkbookSession:
         for source in self.current.all_sources:
             if not source.name_valid:
                 continue
-            alias = self.aliases.get(self.template_id, source.name, source.sheet)
+            alias = self.aliases.get(self.template_id, source.name, source.sheet, row=source.row)
             if alias is None:
                 continue
             destination, _ = self._alias_target_for(source)
@@ -253,14 +253,16 @@ class WorkbookSession:
         source_fields, warnings, sheet_names = self._read_source(Path(path))
         target_row = self.next_empty_row()
         eligible_sources = [field for field in source_fields if field.eligible]
-        # Track why a saved alias did not result in a copy. In particular,
-        # an alias shown in the GUI does NOT mean this input was imported.
+        # Only saved mappings are eligible. A row-scoped alias overrides the
+        # general alias for exactly its row (while still checking its name).
         alias_issues: dict[tuple[str, int], str] = {}
-        valid_candidates: list[tuple[SourceField, DestinationField, int]] = []
+        proposals: dict[int, list[CopyRecord]] = defaultdict(list)
         for source in source_fields:
             if not source.name_valid:
                 continue
-            alias = self.aliases.get(self.template_id, source.name, source.sheet)
+            alias = self.aliases.get(
+                self.template_id, source.name, source.sheet, row=source.row,
+            )
             if alias is None:
                 continue
             destination, column = self._alias_target_for(source)
@@ -273,35 +275,51 @@ class WorkbookSession:
                     f"У колонці {get_column_letter(column)} немає значення для копіювання"
                 )
             else:
-                valid_candidates.append((source, destination, column))
-
-        # Do not let another same-named row with an EMPTY aliased value block
-        # a valid candidate. Two genuinely populated candidates remain ambiguous.
-        duplicates = Counter(
-            (source.sheet.casefold(), source.key)
-            for source, _, _ in valid_candidates
-        )
-        proposals: dict[int, list[CopyRecord]] = defaultdict(list)
-        for source, destination, column in valid_candidates:
-            if duplicates[(source.sheet.casefold(), source.key)] > 1:
-                alias_issues[source.location] = (
-                    "Декілька рядків із такою назвою на аркуші мають значення "
-                    "у колонці аліаса"
-                )
-                continue
-            proposals[destination.column].append(
-                CopyRecord(source.using_column(column), destination, "Аліас")
-            )
+                specific = self.aliases.get_exact(
+                    self.template_id, source.name, source.sheet, row=source.row,
+                ) is not None
+                proposals[destination.column].append(CopyRecord(
+                    source.using_column(column), destination, "Аліас",
+                    alias_row=source.row if specific else None,
+                ))
 
         safe_matches = []
+        had_duplicates = False
+        had_conflicts = False
         for matches in proposals.values():
             if len(matches) == 1:
                 safe_matches.append(matches[0])
                 continue
+            # One row-specific alias wins over any number of general aliases
+            # with the same normalized source name targeting this column.
+            scoped = [record for record in matches if record.alias_row is not None]
+            if (len(scoped) == 1
+                    and all(record.source.key == scoped[0].source.key
+                            for record in matches)):
+                winner = scoped[0]
+                safe_matches.append(winner)
+                for record in matches:
+                    if record is not winner:
+                        alias_issues[record.source.location] = (
+                            f"Пріоритет має аліас для рядка {winner.source.row}"
+                        )
+                continue
+            # A general alias pointing to several identically named rows
+            # is ambiguous unless the single explicit-row alias above resolves it.
+            same_sheet_and_name = len({
+                (record.source.sheet.casefold(), record.source.key)
+                for record in matches
+            }) == 1
+            had_duplicates |= same_sheet_and_name
+            had_conflicts |= not same_sheet_and_name
+            reason = (
+                "Декілька рядків із такою назвою на аркуші мають значення "
+                "у колонці аліаса"
+                if same_sheet_and_name else
+                "Кілька параметрів із аліасами претендують на цей вихідний стовпчик"
+            )
             for record in matches:
-                alias_issues[record.source.location] = (
-                    "Кілька параметрів із аліасами претендують на цей вихідний стовпчик"
-                )
+                alias_issues[record.source.location] = reason
 
         safe_matches.sort(key=lambda rec: rec.destination.column)
         self._write(target_row, safe_matches)
@@ -311,11 +329,11 @@ class WorkbookSession:
             sheets=sheet_names, all_sources=source_fields,
             alias_issues=alias_issues,
         )
-        if any(count > 1 for count in duplicates.values()):
+        if had_duplicates:
             result.warnings.append(
                 "Повторювані назви в межах одного аркуша потребують ручного вибору"
             )
-        if any(len(matches) > 1 for matches in proposals.values()):
+        if had_conflicts:
             result.warnings.append(
                 "Кілька вхідних параметрів претендують на один стовпчик — пропущено"
             )
@@ -335,7 +353,7 @@ class WorkbookSession:
 
     def copy_manually(
         self, source_row: int, destination_col: int, sheet: str = SOURCE_SHEET,
-        source_column: int = 3,
+        source_column: int = 3, alias_row: int | None = None,
     ) -> str | None:
         result = self.current
         if result is None:
@@ -349,13 +367,18 @@ class WorkbookSession:
             raise ValueError(
                 f"У комірці {sheet}!{get_column_letter(source_column)}{source_row} немає значення"
             )
-        record = CopyRecord(source.using_column(source_column), destination, "Вручну")
+        if alias_row is not None and alias_row != source.row:
+            raise ValueError("Номер рядка аліаса має збігатися з вибраним рядком")
+        record = CopyRecord(
+            source.using_column(source_column), destination, "Вручну",
+            alias_row=alias_row,
+        )
         self._write(result.row, [record])
         result.copied.append(record)
         result.unmatched_sources.remove(source)
         result.unmatched_destinations.remove(destination)
         try:
-            self.aliases.set(self.template_id, record.source, destination)
+            self.aliases.set(self.template_id, record.source, destination, row=alias_row)
         except (OSError, ValueError) as exc:
             return f"Значення скопійовано, але аліас не збережено: {exc}"
         return None
