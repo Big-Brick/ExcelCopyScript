@@ -9,6 +9,7 @@ from tkinter import filedialog, messagebox, ttk
 from .alias_dialog import AliasManagerDialog
 from .aliases import AliasStore
 from .config import FILE_TYPES
+from .recent_directories import RecentDirectories
 from .utils import present
 from .workbook import WorkbookSession
 
@@ -20,6 +21,7 @@ class ExcelCopyApp(tk.Tk):
         self.minsize(900, 510)
         self.session: WorkbookSession | None = None
         self.aliases: AliasStore | None = None
+        self.recent_directories = RecentDirectories()
         self.destination_var = tk.StringVar(value="Підсумковий файл не вибрано")
         self.source_var = tk.StringVar(value="Вхідний файл не вибрано")
         self.status_var = tk.StringVar(value="Виберіть підсумковий файл, потім вхідний.")
@@ -82,8 +84,21 @@ class ExcelCopyApp(tk.Tk):
                         self.destination_tree.selection() and self.source_tree.selection())
         self.copy_button.configure(state="normal" if can_copy else "disabled")
 
+    def _remember_directory(self, kind: str, filename: str) -> None:
+        """Do not fail a successful file open just because UI preferences cannot be saved."""
+        try:
+            self.recent_directories.remember_file(kind, filename)
+        except (OSError, ValueError) as exc:
+            messagebox.showwarning(
+                "Не вдалося запам'ятати теку",
+                f"Файл відкрито, але теку не вдалося зберегти:\n{exc}",
+            )
+
     def open_destination(self):
-        chosen = filedialog.askopenfilename(title="Підсумковий Excel-файл", filetypes=FILE_TYPES)
+        chosen = filedialog.askopenfilename(
+            title="Підсумковий Excel-файл", filetypes=FILE_TYPES,
+            initialdir=str(self.recent_directories.initial_directory("destination")),
+        )
         if not chosen:
             return
         try:
@@ -93,6 +108,7 @@ class ExcelCopyApp(tk.Tk):
             messagebox.showerror("Помилка відкриття", str(exc))
             return
         self.aliases, self.session = aliases, session
+        self._remember_directory("destination", chosen)
         self.destination_var.set(f"Підсумковий: {session.path}")
         self.source_var.set("Вхідний файл не вибрано")
         self.source_button.configure(state="normal")
@@ -110,8 +126,12 @@ class ExcelCopyApp(tk.Tk):
     def open_source(self):
         if self.session is None:
             return
-        chosen = filedialog.askopenfilename(title="Вхідний Excel-файл", filetypes=FILE_TYPES,
-                                            initialdir=str(self.session.path.parent))
+        chosen = filedialog.askopenfilename(
+            title="Вхідний Excel-файл", filetypes=FILE_TYPES,
+            initialdir=str(self.recent_directories.initial_directory(
+                "source", fallback=self.session.path.parent,
+            )),
+        )
         if not chosen:
             return
         try:
@@ -119,6 +139,7 @@ class ExcelCopyApp(tk.Tk):
         except Exception as exc:
             messagebox.showerror("Помилка імпорту", str(exc))
             return
+        self._remember_directory("source", chosen)
         self.source_var.set(f"Вхідний: {chosen} → рядок {result.row}")
         self._refresh_tables()
 
