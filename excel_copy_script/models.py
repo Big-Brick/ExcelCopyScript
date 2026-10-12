@@ -32,13 +32,18 @@ class SourceField:
     values: tuple[object, ...] = ()
     name_valid: bool = True
     value_column: int = 3
+    value_first_column: int = 3
 
     def value_at(self, column: int) -> object:
-        if not 3 <= column <= 7:
-            raise ValueError("Стовпчик значення має бути між C та G")
         if self.values:
-            return self.values[column - 3]
-        return self.value if column == 3 else None
+            offset = column - self.value_first_column
+            if not 0 <= offset < len(self.values):
+                raise ValueError("Колонка значення поза діапазоном джерела")
+            return self.values[offset]
+        # Preserve older programmatic uses without an explicit values tuple.
+        if column != self.value_first_column:
+            return None
+        return self.value
 
     def using_column(self, column: int) -> "SourceField":
         return replace(self, value=self.value_at(column), value_column=column)
@@ -47,7 +52,7 @@ class SourceField:
     def eligible(self) -> bool:
         from .utils import nonempty
         return self.name_valid and bool(self.name.strip()) and any(
-            nonempty(self.value_at(col)) for col in range(3, 8)
+            nonempty(value) for value in (self.values or (self.value,))
         )
 
     @property

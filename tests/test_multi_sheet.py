@@ -295,6 +295,7 @@ class SheetSelectorTests(unittest.TestCase):
             tree=self.FakeTree(),
             values_tree=self.FakeTree(),
             COLUMNS=tuple(range(3, 8)),
+            layout=__import__("excel_copy_script.workbook_layout", fromlist=["WorkbookLayout"]).WorkbookLayout(),
         )
         panel.refresh = lambda rows=None, alias_targets=None, copied_locations=None, alias_issues=None: SourceRowsPanel.refresh(
             panel, rows, alias_targets=alias_targets,

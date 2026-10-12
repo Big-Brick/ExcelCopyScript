@@ -6,7 +6,8 @@ import tkinter as tk
 from collections.abc import Callable, Sequence
 from tkinter import ttk
 
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import get_column_letter, column_index_from_string
+from .workbook_layout import WorkbookLayout
 
 from .config import SOURCE_SHEET
 from .models import SourceField
@@ -20,7 +21,7 @@ class SourceRowsPanel(ttk.Frame):
 
     def __init__(
         self, parent: tk.Misc, on_selection_changed: Callable[[], None] | None = None,
-        *, compact_header: bool = False,
+        *, compact_header: bool = False, layout: WorkbookLayout | None = None,
     ) -> None:
         super().__init__(parent, padding=4)
         self._rows: list[SourceField] = []
@@ -32,8 +33,10 @@ class SourceRowsPanel(ttk.Frame):
         self._syncing_selection = False
         self._syncing_scroll = False
         self._compact_header = compact_header
+        self.layout = layout or WorkbookLayout()
+        self.COLUMNS = self.layout.source_columns
         self.selected_sheet = tk.StringVar(value="")
-        self.selected_value_column = tk.StringVar(value="C")
+        self.selected_value_column = tk.StringVar(value=self.layout.source_letters[0])
 
         # In the creation tab the title and controls share a single strip,
         # freeing an entire line of height for the incoming rows Treeviews.
@@ -61,7 +64,7 @@ class SourceRowsPanel(ttk.Frame):
         ttk.Label(selector, text="Значення з:").pack(side="left")
         self.value_combo = ttk.Combobox(
             selector, textvariable=self.selected_value_column,
-            state="readonly", values=("C", "D", "E", "F", "G"), width=3,
+            state="readonly", values=self.layout.source_letters, width=4,
         )
         self.value_combo.pack(side="left", padx=(6, 0))
         self.value_combo.bind("<<ComboboxSelected>>", self._notify_selection)
@@ -187,15 +190,28 @@ class SourceRowsPanel(ttk.Frame):
             self._notify_selection()
 
     def source_column(self) -> int:
-        return ord(self.selected_value_column.get()) - ord("A") + 1
+        return column_index_from_string(self.selected_value_column.get())
+
+    def set_layout(self, layout: WorkbookLayout) -> None:
+        """Refresh source value headings after switching profile at runtime."""
+        self.layout = layout
+        self.COLUMNS = layout.source_columns
+        self.values_tree.configure(columns=layout.source_letters)
+        for letter in layout.source_letters:
+            self.values_tree.heading(letter, text=letter)
+            self.values_tree.column(letter, width=140, minwidth=100, stretch=False)
+        self.value_combo.configure(values=layout.source_letters)
+        self.selected_value_column.set(layout.source_letters[0])
+        self.set_sheets([])
 
     def set_sheets(self, sheets: Sequence[str]) -> None:
         sheets = list(sheets)
         self.sheet_combo.configure(values=sheets, state="readonly" if sheets else "disabled")
         self.selected_sheet.set(
-            SOURCE_SHEET if SOURCE_SHEET in sheets else (sheets[0] if sheets else "")
+            self.layout.preferred_source_sheet if self.layout.preferred_source_sheet in sheets
+            else (sheets[0] if sheets else "")
         )
-        self.selected_value_column.set("C")
+        self.selected_value_column.set(self.layout.source_letters[0])
         self.refresh(
             [], alias_targets={}, copied_locations=set(), alias_issues={},
         )
@@ -258,7 +274,9 @@ class SourceRowsPanel(ttk.Frame):
         selected = self.selected_source()
         issue = self._alias_issues.get(selected.location) if selected else None
         self.issue_var.set(
-            f"⚠ {selected.sheet}!B{selected.row}: {issue}" if issue else ""
+            f"⚠ {selected.sheet}!"
+            f"{get_column_letter(self.layout.source_name_column)}{selected.row}: {issue}"
+            if issue else ""
         )
         if getattr(self, "_compact_header", False):
             if issue and not self.issue_label.winfo_manager():

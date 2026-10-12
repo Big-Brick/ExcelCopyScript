@@ -18,7 +18,14 @@ from .utils import normalize
 class AliasStore:
     """Aliases indexed by template, sheet, name and optional source row."""
 
-    def __init__(self, path: Path | None = None):
+    def __init__(self, path: Path | None = None, *, profile=None):
+        # Legacy standalone AliasStore remains readable for old integrations.
+        # The GUI uses the profile-backed store exclusively.
+        self.profile = profile
+        if profile is not None:
+            self.path = profile.path
+            self.data = profile.aliases_data
+            return
         self.path = path or (Path.home() / ".config" / "excel-copy-script" / "aliases.json")
         if self.path.exists():
             try:
@@ -225,7 +232,20 @@ class AliasStore:
                 templates[template_id] = snapshot
             raise
 
+    @classmethod
+    def from_profile(cls, profile) -> "AliasStore":
+        return cls(profile=profile)
+
+    def reload(self) -> "AliasStore":
+        if self.profile is not None:
+            from .profiles import Profile
+            return type(self).from_profile(Profile.load(self.profile.path))
+        return type(self)(self.path)
+
     def _save(self) -> None:
+        if self.profile is not None:
+            self.profile.save()
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = None
         try:

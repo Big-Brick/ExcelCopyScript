@@ -14,6 +14,8 @@ from .config import FILE_TYPES
 from .gui_layout import LayoutPersistence
 from .models import AliasEntry, CopyRecord, SourceField
 from .recent_directories import RecentDirectories
+from .profiles import Profile, ProfileManager
+from .profile_migrations import build_profile_from_legacy
 from .row_selection_dialog import RowSelectionDialog
 from .source_rows_panel import SourceRowsPanel
 from .utils import nonempty, present
@@ -30,12 +32,25 @@ class ExcelCopyApp(tk.Tk):
         self.geometry(f"1260x{default_height}")
         self.minsize(900, 510)
         self.session: WorkbookSession | None = None
-        self.aliases: AliasStore | None = None
+        self.profile_manager = ProfileManager()
+        self.profile_error = None
+        try:
+            self.profile = self.profile_manager.load_last()
+        except (OSError, ValueError) as exc:
+            self.profile_error = str(exc)
+            self.profile = Profile(
+                self.profile_manager.default_path,
+                build_profile_from_legacy(
+                    self.profile_manager.config_dir / "_missing_aliases_.json"
+                ),
+            )
+        self.aliases: AliasStore | None = AliasStore.from_profile(self.profile)
         self.opened_sources: list[Path] = []
         self.recent_directories = RecentDirectories()
         self.destination_var = tk.StringVar(value="Підсумковий файл не вибрано")
         self.source_var = tk.StringVar(value="Вхідний файл не вибрано")
         self.status_var = tk.StringVar(value="Виберіть підсумковий файл, потім вхідний.")
+        self.profile_var = tk.StringVar(value=str(self.profile.path))
         self.clear_rows_var = tk.BooleanVar(value=False)
         self._layout_error_reported = False
         self._build_ui()
@@ -43,6 +58,13 @@ class ExcelCopyApp(tk.Tk):
         self._configure_layout_persistence()
         self.notebook.bind("<<NotebookTabChanged>>", self._on_notebook_tab_changed)
         self.after_idle(self._restore_active_tab_layout)
+        if self.profile_error:
+            self.after_idle(lambda: messagebox.showerror(
+                "Помилка завантаження профілю",
+                self.profile_error
+                + "\\nПоточний профіль не змінено. Виберіть коректний профіль.",
+                parent=self,
+            ))
 
     def _build_ui(self) -> None:
         top = ttk.Frame(self, padding=12)
@@ -63,6 +85,19 @@ class ExcelCopyApp(tk.Tk):
         ttk.Checkbutton(
             top, text="Очищати робочу область", variable=self.clear_rows_var,
         ).pack(side="left", padx=(12, 0))
+        profile_bar = ttk.Frame(self, padding=(12, 0, 12, 2))
+        profile_bar.pack(fill="x")
+        ttk.Label(profile_bar, text="Профіль:").pack(side="left")
+        ttk.Label(profile_bar, textvariable=self.profile_var).pack(
+            side="left", fill="x", expand=True, padx=(6, 12),
+        )
+        ttk.Button(
+            profile_bar, text="Відкрити профіль…", command=self.open_profile,
+        ).pack(side="left")
+        ttk.Button(
+            profile_bar, text="Зберегти копію профілю…",
+            command=self.save_profile_as,
+        ).pack(side="left", padx=(8, 0))
         ttk.Label(self, textvariable=self.destination_var, padding=(12, 0)).pack(anchor="w")
         ttk.Label(self, textvariable=self.source_var, padding=(12, 2)).pack(anchor="w")
 
@@ -81,7 +116,7 @@ class ExcelCopyApp(tk.Tk):
             review_panes, "Скопійовані значення",
             ("Звідки", "Куди", "Значення", "Спосіб"), (180, 190, 140, 130),
         )
-        self.review_sources = SourceRowsPanel(review_panes)
+        self.review_sources = SourceRowsPanel(review_panes, layout=self.profile.layout)
         review_panes.add(copied_frame, weight=1)
         review_panes.add(self.review_sources, weight=1)
 
@@ -118,7 +153,7 @@ class ExcelCopyApp(tk.Tk):
         self.destination_tree.tag_configure("skipped", background="#fff0c2")
         self.create_sources = SourceRowsPanel(
             create_panes, on_selection_changed=self._on_selection,
-            compact_header=True,
+            compact_header=True, layout=self.profile.layout,
         )
         create_panes.add(destination_frame, weight=1)
         create_panes.add(self.create_sources, weight=1)
@@ -367,6 +402,76 @@ class ExcelCopyApp(tk.Tk):
                 f"Файл відкрито, але теку не вдалося зберегти:\n{exc}",
             )
 
+    def _activate_profile(self, profile: Profile) -> None:
+        """Change rules atomically; never reinterpret previous imports silently."""
+        new_aliases = AliasStore.from_profile(profile)
+        old_path = self.session.path if self.session is not None else None
+        new_session = None
+        compatibility_error = None
+        if old_path is not None:
+            try:
+                new_session = WorkbookSession(old_path, new_aliases)
+            except (OSError, ValueError) as exc:
+                compatibility_error = str(exc)
+        self.profile_manager.remember(profile)
+        self.profile = profile
+        self.profile_var.set(str(profile.path))
+        self.aliases, self.session = new_aliases, new_session
+        for panel in (self.review_sources, self.create_sources):
+            panel.set_layout(profile.layout)
+        self._set_source_sheets([])
+        self._clear_tables()
+        self._refresh_destination_rows()
+        if new_session is None:
+            self.opened_sources = []
+            self.source_button.configure(state="disabled")
+            self.restart_button.configure(state="disabled")
+            self.alias_button.configure(state="disabled")
+            self.destination_var.set("Підсумковий файл не вибрано")
+            self.source_var.set("Вхідний файл не вибрано")
+            self.status_var.set(
+                "Профіль активовано. Виберіть підсумковий файл."
+                + (f" Попередній файл несумісний: {compatibility_error}"
+                   if compatibility_error else "")
+            )
+        else:
+            self.source_button.configure(state="normal")
+            self.restart_button.configure(state="normal")
+            self.alias_button.configure(state="normal")
+            self.source_var.set("Профіль змінено; для повторного імпорту натисніть ↻")
+            self.status_var.set(
+                "Профіль змінено. Підсумковий файл не змінено; "
+                "список попередніх вхідних файлів збережено для повного перезапуску."
+            )
+
+    def open_profile(self) -> None:
+        chosen = filedialog.askopenfilename(
+            title="Відкрити профіль ExcelCopyScript",
+            filetypes=[("Профілі JSON", "*.json")],
+            initialdir=str(self.profile.path.parent),
+        )
+        if not chosen:
+            return
+        try:
+            self._activate_profile(Profile.load(Path(chosen)))
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Помилка профілю", str(exc), parent=self)
+
+    def save_profile_as(self) -> None:
+        chosen = filedialog.asksaveasfilename(
+            title="Створити копію профілю",
+            filetypes=[("Профілі JSON", "*.json")],
+            defaultextension=".json",
+            initialdir=str(self.profile.path.parent),
+        )
+        if not chosen:
+            return
+        try:
+            duplicate = self.profile.copy_as(Path(chosen))
+            self._activate_profile(duplicate)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Помилка збереження профілю", str(exc), parent=self)
+
     def open_destination(self) -> None:
         chosen = filedialog.askopenfilename(
             title="Підсумковий Excel-файл", filetypes=FILE_TYPES,
@@ -375,7 +480,10 @@ class ExcelCopyApp(tk.Tk):
         if not chosen:
             return
         try:
-            aliases = AliasStore()
+            aliases = (
+                AliasStore.from_profile(self.profile)
+                if hasattr(self, "profile") else AliasStore()
+            )
             session = WorkbookSession(Path(chosen), aliases)
             if self.clear_rows_var.get():
                 session.clear_previous_imports()
@@ -514,7 +622,9 @@ class ExcelCopyApp(tk.Tk):
                 self.copied_tree.insert(
                     "", "end", iid=str(index),
                     values=(
-                        (f"{record.source.sheet}!B{record.source.row}: {record.source.name} "
+                        (f"{record.source.sheet}!"
+                         f"{get_column_letter(self.session.layout.source_name_column)}"
+                         f"{record.source.row}: {record.source.name} "
                          f"[{get_column_letter(record.source.value_column)}{record.source.row}]"),
                         f"{record.destination.letter}: {record.destination.name}",
                         present(record.source.value), method,
@@ -551,7 +661,11 @@ class ExcelCopyApp(tk.Tk):
                 tags = ("filled",)
             elif failures:
                 source, reason = failures[0]
-                origin = f"⚠ {source.sheet}!B{source.row}: {reason}"
+                origin = (
+                    f"⚠ {source.sheet}!"
+                    f"{get_column_letter(self.session.layout.source_name_column)}"
+                    f"{source.row}: {reason}"
+                )
                 if len(failures) > 1:
                     origin += f" (+{len(failures) - 1} інших)"
                 tags = ("skipped",)

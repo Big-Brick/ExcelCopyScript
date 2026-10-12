@@ -13,7 +13,8 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
 from .aliases import AliasStore
-from .config import DESTINATION_SHEET, FIRST_DATA_ROW, FIRST_DESTINATION_COLUMN, HEADER_ROW, SOURCE_SHEET
+from .config import SOURCE_SHEET
+from .workbook_layout import WorkbookLayout
 from .models import (
     AliasEntry, CopyRecord, DestinationField, ImportResult, RowMatch,
     RowSelectionRequest, SourceField,
@@ -28,23 +29,31 @@ RowSelector = Callable[[RowSelectionRequest], int | None]
 
 
 class WorkbookSession:
-    def __init__(self, path: Path, aliases: AliasStore):
+    def __init__(
+        self, path: Path, aliases: AliasStore, layout: WorkbookLayout | None = None,
+    ):
+        self.layout = layout or (
+            aliases.profile.layout if aliases.profile is not None else WorkbookLayout()
+        )
         self.path = Path(path)
         if self.path.suffix.lower() != ".xlsx":
             raise ValueError("Підтримуються лише файли .xlsx")
         self.workbook = load_workbook(self.path)
-        if DESTINATION_SHEET not in self.workbook:
-            raise ValueError(f"У підсумковому файлі немає аркуша «{DESTINATION_SHEET}»")
-        self.sheet = self.workbook[DESTINATION_SHEET]
+        if self.layout.destination_sheet not in self.workbook:
+            raise ValueError(
+                f"У підсумковому файлі немає аркуша «{self.layout.destination_sheet}»"
+            )
+        self.sheet = self.workbook[self.layout.destination_sheet]
         header_fields = [DestinationField(cell.column, cell.value.strip())
-                         for cell in self.sheet[HEADER_ROW]
+                         for cell in self.sheet[self.layout.header_row]
                          if isinstance(cell.value, str) and cell.value.strip()]
         # Column A contains a row number, not a field to import or match.
         self.fields = [field for field in header_fields
-                       if field.column >= FIRST_DESTINATION_COLUMN]
+                       if field.column >= self.layout.first_destination_column]
         if not self.fields:
             raise ValueError(
-                f"У рядку {HEADER_ROW}, починаючи зі стовпчика B, немає текстових заголовків"
+                f"У рядку {self.layout.header_row}, починаючи зі стовпчика "
+                f"{get_column_letter(self.layout.first_destination_column)}, немає текстових заголовків"
             )
         self.aliases = aliases
         self.template_id = aliases.template_id(self.fields)
@@ -76,8 +85,8 @@ class WorkbookSession:
             ) as stream:
                 staged_path = Path(stream.name)
             shutil.copy2(self.path, staged_path)
-            fresh_aliases = AliasStore(self.aliases.path)
-            fresh = WorkbookSession(staged_path, fresh_aliases)
+            fresh_aliases = self.aliases.reload()
+            fresh = WorkbookSession(staged_path, fresh_aliases, layout=self.layout)
             if clear_existing:
                 fresh.clear_previous_imports()
             for index, filename in enumerate(inputs, start=1):
@@ -105,11 +114,11 @@ class WorkbookSession:
         """Erase the writable output area when an existing destination is opened.
 
         Only columns represented by importable headers are writable, starting
-        from FIRST_DATA_ROW. Leave ordinal column A, headers, styles, other
+        from self.layout.first_data_row. Leave ordinal column A, headers, styles, other
         sheets and unrelated columns alone. Persist immediately if needed.
         """
         modified = []
-        for row in range(FIRST_DATA_ROW, self.sheet.max_row + 1):
+        for row in range(self.layout.first_data_row, self.sheet.max_row + 1):
             for field in self.fields:
                 cell = self.sheet.cell(row, field.column)
                 if cell.value is not None:
@@ -129,11 +138,11 @@ class WorkbookSession:
     def next_empty_row(self) -> int:
         # An ordinal number in A does not make a row occupied. Still inspect
         # every other column to avoid overwriting partially populated records.
-        for row in range(FIRST_DATA_ROW, self.sheet.max_row + 1):
+        for row in range(self.layout.first_data_row, self.sheet.max_row + 1):
             if all(not nonempty(self.sheet.cell(row, col).value)
-                   for col in range(FIRST_DESTINATION_COLUMN, self.sheet.max_column + 1)):
+                   for col in range(self.layout.first_destination_column, self.sheet.max_column + 1)):
                 return row
-        return max(FIRST_DATA_ROW, self.sheet.max_row + 1)
+        return max(self.layout.first_data_row, self.sheet.max_row + 1)
 
     def _read_source(self, path: Path) -> tuple[list[SourceField], list[str], list[str]]:
         if path.suffix.lower() != ".xlsx":
@@ -151,22 +160,27 @@ class WorkbookSession:
             for sheet_name in sheet_names:
                 cached_ws = cached[sheet_name]
                 formula_ws = formulas[sheet_name]
+                name_col = self.layout.source_name_column
+                first = min(name_col, self.layout.source_value_first_column)
+                last = max(name_col, self.layout.source_value_last_column)
                 cached_rows = cached_ws.iter_rows(
-                    min_col=2, max_col=7, values_only=True,
+                    min_row=self.layout.first_source_row,
+                    min_col=first, max_col=last, values_only=True,
                 )
-                formula_rows = formula_ws.iter_rows(min_col=2, max_col=7)
+                formula_rows = formula_ws.iter_rows(
+                    min_row=self.layout.first_source_row, min_col=first, max_col=last,
+                )
                 for row, (cells, formula_cells) in enumerate(
-                    zip(cached_rows, formula_rows), start=1
+                    zip(cached_rows, formula_rows), start=self.layout.first_source_row
                 ):
-                    raw_name = cells[0]
+                    raw_name = cells[name_col - first]
                     name_valid = isinstance(raw_name, str) and bool(raw_name.strip())
                     name = raw_name.strip() if name_valid else (
                         "" if raw_name is None else str(raw_name)
                     )
-                    values = tuple(cells[1:])
-                    for col, (value, formula_cell) in enumerate(
-                        zip(values, formula_cells[1:]), start=3
-                    ):
+                    values = tuple(cells[col - first] for col in self.layout.source_columns)
+                    for col, value in zip(self.layout.source_columns, values):
+                        formula_cell = formula_cells[col - first]
                         if not nonempty(value) and formula_cell.data_type == "f":
                             warnings.append(
                                 f"{sheet_name}!{get_column_letter(col)}{row}: "
@@ -175,6 +189,7 @@ class WorkbookSession:
                     entries.append(SourceField(
                         row, name, values[0], sheet=sheet_name,
                         values=values, name_valid=name_valid,
+                        value_first_column=self.layout.source_value_first_column,
                     ))
             return entries, warnings, sheet_names
         finally:
@@ -197,10 +212,10 @@ class WorkbookSession:
         """Resolve only an explicitly saved alias, never an incidental name match."""
         alias = self.aliases.get(self.template_id, source.name, source.sheet, row=source.row)
         if alias is None:
-            return None, 3
+            return None, self.layout.source_value_first_column
         return (
             self._resolve_alias_destination(alias.get("header"), alias.get("column")),
-            alias.get("source_column", 3),
+            alias.get("source_column", self.layout.source_value_first_column),
         )
 
     def aliases_for_destination(self, column: int) -> list[AliasEntry]:
@@ -261,9 +276,9 @@ class WorkbookSession:
         if not records:
             return ()
         candidates = []
-        for row in range(FIRST_DATA_ROW, self.sheet.max_row + 1):
+        for row in range(self.layout.first_data_row, self.sheet.max_row + 1):
             if not any(nonempty(self.sheet.cell(row, col).value)
-                       for col in range(FIRST_DESTINATION_COLUMN, self.sheet.max_column + 1)):
+                       for col in range(self.layout.first_destination_column, self.sheet.max_column + 1)):
                 continue
             matching, differing = [], []
             for record in records:
@@ -319,7 +334,7 @@ class WorkbookSession:
         # Validate all cells before changing even the first one.
         for record in records:
             column = record.destination.column
-            if column < FIRST_DESTINATION_COLUMN:
+            if column < self.layout.first_destination_column:
                 raise ValueError("Стовпчик A містить порядкові номери і не призначений для імпорту")
             cell = self.sheet.cell(row, column)
             if nonempty(cell.value) and not allow_overwrite:
@@ -375,7 +390,7 @@ class WorkbookSession:
             destination, column = self._alias_target_for(source)
             if destination is None:
                 alias_issues[source.location] = "Цільовий стовпчик аліаса не знайдено"
-            elif type(column) is not int or not 3 <= column <= 7:
+            elif type(column) is not int or column not in self.layout.source_columns:
                 alias_issues[source.location] = f"Недопустима колонка значення: {column}"
             elif not nonempty(source.value_at(column)):
                 alias_issues[source.location] = (
@@ -464,7 +479,7 @@ class WorkbookSession:
 
     def copy_manually(
         self, source_row: int, destination_col: int, sheet: str = SOURCE_SHEET,
-        source_column: int = 3, alias_row: int | None = None,
+        source_column: int | None = None, alias_row: int | None = None,
     ) -> str | None:
         result = self.current
         if result is None:
@@ -474,6 +489,10 @@ class WorkbookSession:
         destination = next((d for d in result.unmatched_destinations if d.column == destination_col), None)
         if source is None or destination is None:
             raise ValueError("Вибраний параметр уже був скопійований")
+        if source_column is None:
+            source_column = self.layout.source_value_first_column
+        if source_column not in self.layout.source_columns:
+            raise ValueError("Вхідна колонка поза діапазоном профілю")
         if not nonempty(source.value_at(source_column)):
             raise ValueError(
                 f"У комірці {sheet}!{get_column_letter(source_column)}{source_row} немає значення"
