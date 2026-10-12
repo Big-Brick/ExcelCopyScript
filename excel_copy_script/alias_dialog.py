@@ -8,6 +8,7 @@ from tkinter import messagebox, ttk
 from openpyxl.utils import get_column_letter
 
 from .aliases import AliasStore
+from .gui_layout import LayoutPersistence
 from .models import AliasEntry, DestinationField
 
 
@@ -20,11 +21,13 @@ class AliasManagerDialog(tk.Toplevel):
         aliases: AliasStore,
         template_id: str,
         fields: list[DestinationField],
+        layout: LayoutPersistence | None = None,
     ) -> None:
         super().__init__(parent)
         self.aliases = aliases
         self.template_id = template_id
         self.fields = fields
+        self.layout = layout
 
         self.title("Керування аліасами")
         self.geometry("830x460")
@@ -32,6 +35,8 @@ class AliasManagerDialog(tk.Toplevel):
         self.transient(parent)
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self._build_ui()
+        if self.layout is not None:
+            self.layout.register_columns("alias_manager", self.tree)
         self._refresh()
         self.grab_set()
         self.focus_set()

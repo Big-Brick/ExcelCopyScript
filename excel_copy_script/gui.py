@@ -319,6 +319,7 @@ class ExcelCopyApp(tk.Tk):
             return
         dialog = AliasManagerDialog(
             self, self.aliases, self.session.template_id, self.session.fields,
+            layout=self.layout,
         )
         self.wait_window(dialog)
         self._refresh_copied()
