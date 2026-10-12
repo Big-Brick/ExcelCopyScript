@@ -52,20 +52,41 @@ class MultiSheetTests(unittest.TestCase):
         })
         result = self.session.open_input(path)
         self.assertEqual(result.sheets, [SOURCE_SHEET, "Без даних", "Склад"])
-        self.assertEqual([s.sheet for s in result.unmatched_sources], ["Склад"])
+        self.assertEqual([s.sheet for s in result.unmatched_sources], [SOURCE_SHEET, "Склад"])
 
-    def test_only_summary_sheet_uses_exact_header_match(self):
+    def test_same_headers_on_any_sheet_never_copy_without_alias(self):
         filename = self.make_input("exact.xlsx", {
             SOURCE_SHEET: [(1, "Техніка", 5)],
             "Склад": [(1, "Резерв", 42), (2, "Кількість", 13)],
         })
         result = self.session.open_input(filename)
-        self.assertEqual([(c.source.sheet, c.destination.column) for c in result.copied],
-                         [(SOURCE_SHEET, 3)])
-        self.assertEqual(self.session.sheet["C4"].value, 5)
+        self.assertEqual(result.copied, [])
+        self.assertIsNone(self.session.sheet["C4"].value)
         self.assertIsNone(self.session.sheet["D4"].value)
-        self.assertEqual({s.sheet for s in result.unmatched_sources}, {"Склад"})
-        self.assertEqual({s.name for s in result.unmatched_sources}, {"Резерв", "Кількість"})
+        self.assertEqual({s.sheet for s in result.unmatched_sources}, {SOURCE_SHEET, "Склад"})
+        self.assertEqual({s.name for s in result.unmatched_sources},
+                         {"Техніка", "Резерв", "Кількість"})
+
+    def test_workbook_without_summary_sheet_uses_aliases_only(self):
+        input_file = self.root / "other_sheet_only.xlsx"
+        book = Workbook()
+        ws = book.active
+        ws.title = "Склад"
+        ws["B2"], ws["C2"] = "Техніка", 27
+        book.save(input_file)
+
+        first = self.session.open_input(input_file)
+        self.assertEqual(first.sheets, ["Склад"])
+        self.assertFalse(first.copied)
+        self.assertEqual([s.name for s in first.unmatched_sources], ["Техніка"])
+
+        self.session.copy_manually(2, 3, sheet="Склад")
+        self.assertEqual(self.session.sheet["C4"].value, 27)
+        reopened = WorkbookSession(self.summary, AliasStore(self.alias_file))
+        later = reopened.open_input(input_file)
+        self.assertEqual([(rec.method, rec.source.sheet) for rec in later.copied],
+                         [("Аліас", "Склад")])
+        self.assertEqual(reopened.sheet["C5"].value, 27)
 
     def test_same_parameter_on_different_sheets_is_independent(self):
         first = self.make_input("first.xlsx", {
@@ -73,8 +94,10 @@ class MultiSheetTests(unittest.TestCase):
             "Склад": [(1, "Техніка", 70)],
         })
         result = self.session.open_input(first)
-        self.assertEqual(len(result.copied), 1)
-        self.assertEqual(result.unmatched_sources[0].sheet, "Склад")
+        self.assertEqual(len(result.copied), 0)
+        self.assertEqual({source.sheet for source in result.unmatched_sources},
+                         {SOURCE_SHEET, "Склад"})
+        self.session.copy_manually(1, 3, sheet=SOURCE_SHEET)
         self.session.copy_manually(1, 4, sheet="Склад")
         self.assertIsNone(self.aliases.get(self.session.template_id, "Техніка", "Інший"))
         mapping = self.aliases.get(self.session.template_id, "Техніка", "Склад")
@@ -88,7 +111,7 @@ class MultiSheetTests(unittest.TestCase):
         result = session.open_input(second)
         self.assertEqual(
             {(r.source.sheet, r.destination.column, r.method) for r in result.copied},
-            {(SOURCE_SHEET, 3, "Збіг назви"), ("Склад", 4, "Аліас")},
+            {(SOURCE_SHEET, 3, "Аліас"), ("Склад", 4, "Аліас")},
         )
         self.assertEqual(session.sheet["C5"].value, 10)
         self.assertEqual(session.sheet["D5"].value, 80)
@@ -126,6 +149,8 @@ class MultiSheetTests(unittest.TestCase):
             SOURCE_SHEET: [(1, "Техніка", 1)],
             "Склад": [(1, "Дублікат", 4), (2, "Дублікат", 5)],
         })
+        self.aliases.set(self.session.template_id, SourceField(1, "Техніка", 1),
+                         self.session.fields[1])
         self.aliases.set(self.session.template_id, SourceField(1, "Дублікат", 4, "Склад"),
                          self.session.fields[2])
         result = self.session.open_input(source)
@@ -138,6 +163,11 @@ class MultiSheetTests(unittest.TestCase):
             SOURCE_SHEET: [(1, "Техніка", 1)],
             "Склад": [(1, "Списана техніка", 2)],
         })
+        self.aliases.set(
+            self.session.template_id,
+            SourceField(1, "Техніка", 1, SOURCE_SHEET),
+            self.session.fields[1],
+        )
         self.aliases.set(
             self.session.template_id,
             SourceField(1, "Списана техніка", 2, "Склад"),
@@ -399,10 +429,10 @@ class AliasReviewTests(unittest.TestCase):
         self.assertIsNotNone(self.aliases.get(self.template, self.source.name, self.source.sheet))
         self.assertEqual(self.app.session.current.copied, [self.record])
 
-    def test_auto_exact_match_without_alias_cannot_be_deleted(self):
+    def test_copy_without_saved_alias_cannot_be_deleted(self):
         from excel_copy_script.models import CopyRecord
 
-        exact = CopyRecord(SourceField(1, "Техніка", 42), self.destination, "Збіг назви")
+        exact = CopyRecord(SourceField(1, "Техніка", 42), self.destination, "Вручну")
         self.app.session.current.copied = [exact]
         ExcelCopyApp._refresh_copied(self.app)
         self.app.copied_tree.selected = ("0",)

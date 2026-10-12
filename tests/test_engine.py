@@ -40,14 +40,15 @@ class TransferTests(unittest.TestCase):
         wb.save(path)
         return path
 
-    def test_exact_manual_alias_next_file_and_reopen(self):
+    def test_manual_alias_next_file_and_reopen(self):
         first = self.source("first.xlsx", [(1, "Особовий  склад", 13), (2, "Бронетехніка", 7),
                                                (4, "Розділ звіту", None)])
         result = self.session.open_input(first)
         self.assertEqual(result.row, 5)
-        self.assertEqual(len(result.copied), 1)
-        self.assertEqual(result.copied[0].destination.column, 2)
-        self.assertEqual({item.row for item in result.unmatched_sources}, {2})
+        self.assertFalse(result.copied)
+        self.assertEqual({item.row for item in result.unmatched_sources}, {1, 2})
+        # Even a case/whitespace-normalized header match needs a saved alias.
+        self.assertIsNone(self.session.copy_manually(1, 2))
         self.assertIsNone(self.session.copy_manually(2, 3))
         self.assertTrue(self.aliases.path.exists())
         self.assertEqual(len(self.session.current.copied), 2)
@@ -58,7 +59,7 @@ class TransferTests(unittest.TestCase):
         second = self.source("second.xlsx", [(6, "особовий склад", 15), (7, "Бронетехніка", 8)])
         result = self.session.open_input(second)
         self.assertEqual(result.row, 6)
-        self.assertEqual({item.method for item in result.copied}, {"Збіг назви", "Аліас"})
+        self.assertEqual({item.method for item in result.copied}, {"Аліас"})
         ws = load_workbook(self.target, data_only=True)["Дані_підрозділів"]
         self.assertEqual(ws["B4"].value, 99)
         self.assertEqual(ws["B5"].value, 13)
@@ -69,11 +70,25 @@ class TransferTests(unittest.TestCase):
 
     def test_duplicate_source_names_are_not_auto_matched(self):
         file = self.source("duplicate.xlsx", [(1, "Техніка", 1), (3, " ТЕХНІКА ", 2)])
+        self.aliases.set(
+            self.session.template_id,
+            SourceField(1, "Техніка", 1),
+            self.session.fields[1],
+        )
         result = self.session.open_input(file)
         self.assertEqual(len(result.copied), 0)
         self.assertEqual(len(result.unmatched_sources), 2)
         self.assertTrue(any("Повторювані" in note for note in result.warnings))
         self.assertFalse(list(self.directory.glob("summary.backup-*.xlsx")))
+
+    def test_duplicate_names_without_aliases_do_not_warn_about_auto_matching(self):
+        file = self.source("unaliased_duplicate.xlsx", [
+            (1, "Техніка", 1), (2, "техніка", 2),
+        ])
+        result = self.session.open_input(file)
+        self.assertFalse(result.copied)
+        self.assertEqual(len(result.unmatched_sources), 2)
+        self.assertFalse(any("Повторювані" in warning for warning in result.warnings))
 
     def test_column_a_is_excluded_from_fields_and_unmatched_list(self):
         self.assertEqual([field.column for field in self.session.fields], [2, 3, 4])
@@ -89,6 +104,16 @@ class TransferTests(unittest.TestCase):
         ws = self.session.sheet
         ws["A5"] = 5
         ws["A6"] = 6
+        self.aliases.set(
+            self.session.template_id,
+            SourceField(2, "Особовий склад", 21),
+            self.session.fields[0],
+        )
+        self.aliases.set(
+            self.session.template_id,
+            SourceField(3, "Техніка", 11),
+            self.session.fields[1],
+        )
         source = self.source("numbered.xlsx", [(2, "Особовий склад", 21)])
         result = self.session.open_input(source)
         self.assertEqual(result.row, 5)
@@ -174,6 +199,8 @@ class TransferTests(unittest.TestCase):
     def test_conflicting_candidates_do_not_overwrite_each_other(self):
         source = self.source("conflict.xlsx", [(1, "Техніка", 11), (2, "Запас техніки", 22)])
         self.aliases.set(self.session.template_id,
+                         SourceField(1, "Техніка", 11), self.session.fields[1])
+        self.aliases.set(self.session.template_id,
                          SourceField(2, "Запас техніки", 22), self.session.fields[1])
         result = self.session.open_input(source)
         self.assertFalse(result.copied)
@@ -188,6 +215,8 @@ class TransferTests(unittest.TestCase):
 
     def test_untrusted_string_does_not_become_formula(self):
         source = self.source("literal.xlsx", [(1, "Техніка", "'=cmd")])
+        self.aliases.set(self.session.template_id,
+                         SourceField(1, "Техніка", "'=cmd"), self.session.fields[1])
         result = self.session.open_input(source)
         self.assertEqual(len(result.copied), 1)
         wb = load_workbook(self.target)

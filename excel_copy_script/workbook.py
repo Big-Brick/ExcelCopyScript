@@ -1,4 +1,4 @@
-"""ExcelCopyScript: interactive transfer from ВИСНОВКИ to Дані_підрозділів."""
+"""Import spreadsheet values using persisted sheet-scoped aliases only."""
 
 from __future__ import annotations
 
@@ -87,14 +87,11 @@ class WorkbookSession:
         cached = load_workbook(path, read_only=True, data_only=True)
         formulas = None
         try:
-            if SOURCE_SHEET not in cached:
-                raise ValueError(f"У файлі {path.name} немає аркуша «{SOURCE_SHEET}»")
             # Read formula metadata separately: openpyxl does not calculate formulas.
             formulas = load_workbook(path, read_only=True, data_only=False)
             entries: list[SourceField] = []
             warnings: list[str] = []
-            sheet_names = [SOURCE_SHEET] + [name for name in cached.sheetnames
-                                           if name != SOURCE_SHEET]
+            sheet_names = list(cached.sheetnames)
             for sheet_name in sheet_names:
                 cached_ws = cached[sheet_name]
                 formula_ws = formulas[sheet_name]
@@ -129,21 +126,19 @@ class WorkbookSession:
             if formulas is not None:
                 formulas.close()
 
-    def _destination_for(self, source: SourceField) -> tuple[DestinationField | None, str, int]:
+    def _alias_target_for(self, source: SourceField) -> tuple[DestinationField | None, int]:
+        """Resolve only an explicitly saved alias, never an incidental name match."""
         alias = self.aliases.get(self.template_id, source.name, source.sheet)
-        if alias:
-            candidates = [field for field in self.fields if field.key == alias.get("header")]
-            if len(candidates) == 1:
-                return candidates[0], "Аліас", alias.get("source_column", 3)
-            if len(candidates) > 1:
-                pinned = [field for field in candidates if field.column == alias.get("column")]
-                if len(pinned) == 1:
-                    return pinned[0], "Аліас", alias.get("source_column", 3)
-        if source.sheet == SOURCE_SHEET:
-            exact = [field for field in self.fields if field.key == source.key]
-            if len(exact) == 1:
-                return exact[0], "Збіг назви", 3
-        return None, "", 3
+        if alias is None:
+            return None, 3
+        candidates = [field for field in self.fields if field.key == alias.get("header")]
+        if len(candidates) == 1:
+            return candidates[0], alias.get("source_column", 3)
+        if len(candidates) > 1:
+            pinned = [field for field in candidates if field.column == alias.get("column")]
+            if len(pinned) == 1:
+                return pinned[0], alias.get("source_column", 3)
+        return None, 3
 
     def source_alias_targets(self) -> dict[tuple[str, int], str]:
         """Display each matching alias's target next to its source row."""
@@ -153,11 +148,8 @@ class WorkbookSession:
         for source in self.current.all_sources:
             if not source.name_valid:
                 continue
-            alias = self.aliases.get(self.template_id, source.name, source.sheet)
-            if not alias:
-                continue
-            destination, method, _ = self._destination_for(source)
-            if destination is not None and method == "Аліас":
+            destination, _ = self._alias_target_for(source)
+            if destination is not None:
                 targets[source.location] = f"{destination.letter}: {destination.name}"
         return targets
 
@@ -200,13 +192,20 @@ class WorkbookSession:
         source_fields, warnings, sheet_names = self._read_source(Path(path))
         target_row = self.next_empty_row()
         eligible_sources = [field for field in source_fields if field.eligible]
-        duplicates = Counter((field.sheet.casefold(), field.key) for field in eligible_sources)
-        proposals: dict[int, list[CopyRecord]] = defaultdict(list)
+        # Unaliased fields are for manual pairing only: neither their names
+        # nor their duplicates should participate in automatic matching.
+        aliased_sources = []
         for source in eligible_sources:
+            destination, column = self._alias_target_for(source)
+            if destination is not None:
+                aliased_sources.append((source, destination, column))
+        duplicates = Counter(
+            (source.sheet.casefold(), source.key)
+            for source, _, _ in aliased_sources
+        )
+        proposals: dict[int, list[CopyRecord]] = defaultdict(list)
+        for source, destination, column in aliased_sources:
             if duplicates[(source.sheet.casefold(), source.key)] > 1:
-                continue
-            destination, method, column = self._destination_for(source)
-            if destination is None:
                 continue
             if not 3 <= column <= 7:
                 warnings.append(f"{source.sheet}!B{source.row}: недопустимий стовпчик аліаса {column}")
@@ -218,7 +217,7 @@ class WorkbookSession:
                 )
                 continue
             proposals[destination.column].append(
-                CopyRecord(source.using_column(column), destination, method)
+                CopyRecord(source.using_column(column), destination, "Аліас")
             )
         safe_matches = [matches[0] for matches in proposals.values() if len(matches) == 1]
         safe_matches.sort(key=lambda rec: rec.destination.column)
@@ -226,7 +225,7 @@ class WorkbookSession:
         result = ImportResult(filename=Path(path).name, row=target_row, copied=safe_matches,
                               warnings=warnings, sheets=sheet_names, all_sources=source_fields)
         if any(count > 1 for count in duplicates.values()):
-            result.warnings.append("Повторювані назви у вхідному файлі не зіставлено автоматично")
+            result.warnings.append("Повторювані назви в межах одного аркуша потребують ручного вибору")
         if any(len(matches) > 1 for matches in proposals.values()):
             result.warnings.append("Кілька вхідних параметрів претендують на один стовпчик — пропущено")
         used_rows = {record.source.location for record in safe_matches}

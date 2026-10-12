@@ -61,18 +61,28 @@ class SourceColumnTests(unittest.TestCase):
         self.assertEqual(result.copied[0].source.value, 88)
         self.assertEqual(self.session.sheet["B5"].value, 88)
 
-    def test_exact_match_only_uses_c_not_alternative_columns(self):
+    def test_exact_header_names_do_not_copy_until_alias_is_created(self):
         path = self.make_input("exact.xlsx", {
             "B1": "Техніка", "D1": 90,
             "B2": "Резерв", "C2": 5, "G2": 6,
         })
         result = self.session.open_input(path)
-        self.assertEqual(len(result.copied), 1)
-        self.assertEqual(result.copied[0].source.row, 2)
-        self.assertEqual(result.copied[0].source.value_column, 3)
+        self.assertFalse(result.copied)
+        self.assertEqual([x.row for x in result.unmatched_sources], [1, 2])
+        self.assertIsNone(self.session.sheet["B4"].value)
+        self.assertIsNone(self.session.sheet["C4"].value)
+
+        # Despite both names matching output headers, the selected value
+        # columns become usable only after manual alias creation.
+        self.session.copy_manually(1, 2, source_column=4)
+        self.session.copy_manually(2, 3, source_column=3)
+        self.assertEqual(self.session.sheet["B4"].value, 90)
         self.assertEqual(self.session.sheet["C4"].value, 5)
-        self.assertEqual(self.session.sheet["B4"].value, None)
-        self.assertEqual([x.row for x in result.unmatched_sources], [1])
+        for name, column in (("Техніка", 4), ("Резерв", 3)):
+            self.assertEqual(
+                self.aliases.get(self.session.template_id, name)["source_column"],
+                column,
+            )
 
     def test_all_rows_available_even_without_valid_parameter(self):
         path = self.make_input("all.xlsx", {
@@ -82,6 +92,11 @@ class SourceColumnTests(unittest.TestCase):
             "B4": "Без значення",
             "B5": "Можна вручну", "G5": 55,
         })
+        self.aliases.set(
+            self.session.template_id,
+            SourceField(3, "Техніка", 100),
+            self.session.fields[0],
+        )
         result = self.session.open_input(path)
         self.assertEqual([row.row for row in result.all_sources], [1, 2, 3, 4, 5])
         self.assertEqual([row.eligible for row in result.all_sources],
@@ -105,6 +120,11 @@ class SourceColumnTests(unittest.TestCase):
 
     def test_alias_for_other_sheet_reads_g_and_previews_destination(self):
         first = self.make_input("first.xlsx", {"B1": "Техніка", "C1": 10})
+        self.aliases.set(
+            self.session.template_id,
+            SourceField(1, "Техніка", 10),
+            self.session.fields[0],
+        )
         wb = load_workbook(first)
         ws = wb.create_sheet("Склад")
         ws["B2"], ws["G2"] = "Нестача", 23
@@ -117,7 +137,7 @@ class SourceColumnTests(unittest.TestCase):
         second = self.folder / "second.xlsx"
         wb2.save(second)
         result = self.session.open_input(second)
-        self.assertEqual({r.method for r in result.copied}, {"Збіг назви", "Аліас"})
+        self.assertEqual({r.method for r in result.copied}, {"Аліас"})
         self.assertEqual(self.session.sheet["C5"].value, 77)
 
     def test_v2_migration_sets_c_and_preserves_sheet_scope(self):

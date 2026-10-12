@@ -287,7 +287,7 @@ class ExcelCopyApp(tk.Tk):
         if result is not None:
             for index, record in enumerate(result.copied):
                 method = record.method
-                if method in ("Аліас", "Вручну") and not self._record_has_alias(record):
+                if not self._record_has_alias(record):
                     method = "Аліас видалено"
                 self.copied_tree.insert(
                     "", "end", iid=str(index),

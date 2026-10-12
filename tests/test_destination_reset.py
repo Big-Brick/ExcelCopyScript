@@ -77,6 +77,12 @@ class DestinationResetTests(unittest.TestCase):
         ws.title = "ВИСНОВКИ"
         ws["B1"], ws["C1"] = "Техніка", 41
         book.save(source)
+        from excel_copy_script.models import SourceField
+        self.aliases.set(
+            self.session.template_id,
+            SourceField(1, "Техніка", 41),
+            self.session.fields[1],
+        )
         self.assertEqual(self.session.open_input(source).row, 4)
         self.assertEqual(self.session.sheet["C4"].value, 41)
         second_session = WorkbookSession(self.path, AliasStore(self.aliases.path))
