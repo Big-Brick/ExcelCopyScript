@@ -65,7 +65,7 @@ class TransferTests(unittest.TestCase):
         self.assertEqual(ws["C5"].value, 7)
         self.assertEqual(ws["B6"].value, 15)
         self.assertEqual(ws["C6"].value, 8)
-        self.assertEqual(len(list(self.directory.glob("summary.backup-*.xlsx"))), 2)
+        self.assertFalse(list(self.directory.glob("summary.backup-*.xlsx")))
 
     def test_duplicate_source_names_are_not_auto_matched(self):
         file = self.source("duplicate.xlsx", [(1, "Техніка", 1), (3, " ТЕХНІКА ", 2)])

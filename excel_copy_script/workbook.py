@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import os
-import shutil
 import tempfile
 from collections import Counter, defaultdict
-from datetime import datetime
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -46,7 +44,31 @@ class WorkbookSession:
                 legacy_template_id, self.template_id, self.fields
             )
         self.current: ImportResult | None = None
-        self.backup_path: Path | None = None
+
+    def clear_previous_imports(self) -> int:
+        """Erase the writable output area when an existing destination is opened.
+
+        Only columns represented by importable headers are writable, starting
+        from FIRST_DATA_ROW. Leave ordinal column A, headers, styles, other
+        sheets and unrelated columns alone. Persist immediately if needed.
+        """
+        modified = []
+        for row in range(FIRST_DATA_ROW, self.sheet.max_row + 1):
+            for field in self.fields:
+                cell = self.sheet.cell(row, field.column)
+                if cell.value is not None:
+                    modified.append((cell, cell.value))
+                    cell.value = None
+        if modified:
+            try:
+                self._save()
+            except Exception:
+                # The on-disk file is unchanged if atomic save failed.
+                for cell, previous_value in modified:
+                    cell.value = previous_value
+                raise
+        self.current = None
+        return len(modified)
 
     def next_empty_row(self) -> int:
         # An ordinal number in A does not make a row occupied. Still inspect
@@ -160,11 +182,8 @@ class WorkbookSession:
             raise
 
     def _save(self) -> None:
-        if self.backup_path is None:
-            suffix = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-            backup = self.path.with_name(f"{self.path.stem}.backup-{suffix}.xlsx")
-            shutil.copy2(self.path, backup)
-            self.backup_path = backup
+        # The selected destination is written atomically in place.
+        # Automatic backup copies are intentionally not created.
         tmp_path = None
         try:
             with tempfile.NamedTemporaryFile(dir=self.path.parent, prefix=".excel-copy-",

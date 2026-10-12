@@ -100,6 +100,7 @@ class RecentDirectoriesTests(unittest.TestCase):
         session = SimpleNamespace(
             path=destination_path, fields=[object()],
             next_empty_row=lambda: 4,
+            clear_previous_imports=Mock(return_value=0),
             open_input=lambda _: SimpleNamespace(row=4, sheets=["ВИСНОВКИ"]),
         )
         app = SimpleNamespace(
@@ -123,6 +124,7 @@ class RecentDirectoriesTests(unittest.TestCase):
             patch("excel_copy_script.gui.AliasStore"),
         ):
             ExcelCopyApp.open_destination(app)
+            session.clear_previous_imports.assert_called_once_with()
             self.assertEqual(Path(open_dialog.call_args.kwargs["initialdir"]), Path.home())
 
         with patch("excel_copy_script.gui.filedialog.askopenfilename", return_value=str(source_path)) as open_dialog:

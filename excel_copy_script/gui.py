@@ -220,6 +220,7 @@ class ExcelCopyApp(tk.Tk):
         try:
             aliases = AliasStore()
             session = WorkbookSession(Path(chosen), aliases)
+            session.clear_previous_imports()
         except Exception as exc:
             messagebox.showerror("Помилка відкриття", str(exc))
             return
