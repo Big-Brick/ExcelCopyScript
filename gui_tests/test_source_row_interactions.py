@@ -66,6 +66,40 @@ class SourceRowsPanelInteractionTests(unittest.TestCase):
         self.assertEqual(self.panel.tree.selection(), ("row-1",))
         self.assertLess(self.events, 20)
 
+    def test_drag_separator_resizes_frozen_columns_without_affecting_values(self):
+        divider = self.panel.divider
+        start = divider.sashpos(0)
+        self.assertGreater(start, 250)
+        self.assertEqual(len(divider.panes()), 2)
+
+        # Simulate dragging the actual ttk.Panedwindow sash using mouse events.
+        y = divider.winfo_height() // 2
+        for event, x in (
+            ("<ButtonPress-1>", start),
+            ("<B1-Motion>", start + 90),
+            ("<ButtonRelease-1>", start + 90),
+        ):
+            divider.event_generate(event, x=x, y=y)
+            self.root.update()
+
+        self.assertGreater(divider.sashpos(0), start + 50)
+        self.assertGreater(self.panel.tree.winfo_width(), 430)
+        self._click(self.panel.values_tree, 1, "C")
+        self.assertEqual(self.panel.tree.selection(), ("row-1",))
+        self.assertEqual(self.panel.values_tree.selection(), ("row-1",))
+        self.assertLess(self.events, 20)
+
+        # Dragging back should restore more room to the value columns.
+        current = divider.sashpos(0)
+        for event, x in (
+            ("<ButtonPress-1>", current),
+            ("<B1-Motion>", current - 90),
+            ("<ButtonRelease-1>", current - 90),
+        ):
+            divider.event_generate(event, x=x, y=y)
+            self.root.update()
+        self.assertLess(divider.sashpos(0), current - 50)
+
     def test_vertical_scroll_keeps_both_halves_aligned(self):
         self.panel.values_tree.yview_moveto(0.6)
         self.root.update()

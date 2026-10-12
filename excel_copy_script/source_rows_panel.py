@@ -52,8 +52,13 @@ class SourceRowsPanel(ttk.Frame):
         container = ttk.Frame(self)
         container.pack(fill="both", expand=True)
 
-        fixed = ttk.Frame(container, width=395)
-        fixed.pack(side="left", fill="y")
+        # A real draggable sash separates the frozen row identifiers from
+        # the horizontally scrollable C:G values. Its position is independent
+        # in each SourceRowsPanel (one panel per notebook tab).
+        self.divider = ttk.Panedwindow(container, orient="horizontal")
+        self.divider.pack(side="left", fill="both", expand=True)
+
+        fixed = ttk.Frame(self.divider, width=395)
         fixed.pack_propagate(False)
         self.tree = ttk.Treeview(
             fixed, columns=("alias", "row", "name"),
@@ -72,8 +77,7 @@ class SourceRowsPanel(ttk.Frame):
         frozen_spacer = ttk.Frame(fixed)
         frozen_spacer.pack(fill="x")
 
-        scrollable = ttk.Frame(container)
-        scrollable.pack(side="left", fill="both", expand=True)
+        scrollable = ttk.Frame(self.divider)
         letters = tuple(get_column_letter(col) for col in self.COLUMNS)
         self.values_tree = ttk.Treeview(
             scrollable, columns=letters, show="headings", selectmode="browse",
@@ -88,6 +92,11 @@ class SourceRowsPanel(ttk.Frame):
         self.values_tree.pack(fill="both", expand=True)
         xscroll.pack(fill="x")
         frozen_spacer.configure(height=xscroll.winfo_reqheight())
+
+        # Keep the left pane's preferred initial width while allowing the
+        # sash to be moved freely. The right pane consumes window resizes.
+        self.divider.add(fixed, weight=0)
+        self.divider.add(scrollable, weight=1)
 
         vertical = ttk.Scrollbar(container, orient="vertical", command=self._yview)
         vertical.pack(side="right", fill="y")
