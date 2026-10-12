@@ -27,6 +27,7 @@ class ExcelCopyApp(tk.Tk):
         self.minsize(900, 510)
         self.session: WorkbookSession | None = None
         self.aliases: AliasStore | None = None
+        self.opened_sources: list[Path] = []
         self.recent_directories = RecentDirectories()
         self.destination_var = tk.StringVar(value="Підсумковий файл не вибрано")
         self.source_var = tk.StringVar(value="Вхідний файл не вибрано")
@@ -49,6 +50,11 @@ class ExcelCopyApp(tk.Tk):
             command=self.open_source, state="disabled",
         )
         self.source_button.pack(side="left", padx=(12, 0))
+        self.restart_button = ttk.Button(
+            top, text="↻ Повний перезапуск", command=self.restart_session,
+            state="disabled",
+        )
+        self.restart_button.pack(side="left", padx=(12, 0))
         ttk.Label(self, textvariable=self.destination_var, padding=(12, 0)).pack(anchor="w")
         ttk.Label(self, textvariable=self.source_var, padding=(12, 2)).pack(anchor="w")
 
@@ -346,10 +352,12 @@ class ExcelCopyApp(tk.Tk):
             messagebox.showerror("Помилка відкриття", str(exc))
             return
         self.aliases, self.session = aliases, session
+        self.opened_sources = []
         self._remember_directory("destination", chosen)
         self.destination_var.set(f"Підсумковий: {session.path}")
         self.source_var.set("Вхідний файл не вибрано")
         self.source_button.configure(state="normal")
+        self.restart_button.configure(state="normal")
         self.alias_button.configure(state="normal")
         self._set_source_sheets([])
         self._clear_tables()
@@ -386,10 +394,53 @@ class ExcelCopyApp(tk.Tk):
         except Exception as exc:
             messagebox.showerror("Помилка імпорту", str(exc))
             return
+        self.opened_sources.append(Path(chosen))
         self._remember_directory("source", chosen)
         self.source_var.set(f"Вхідний: {chosen} → рядок {result.row}")
         self._set_source_sheets(result.sheets)
         self._refresh_tables()
+
+    def restart_session(self) -> None:
+        """Replay all selected source files with current aliases, no dialogs."""
+        if self.session is None:
+            return
+        try:
+            fresh = self.session.restart_with_inputs(self.opened_sources)
+        except Exception as exc:
+            messagebox.showerror(
+                "Помилка повного перезапуску",
+                f"{exc}\n\nПідсумковий файл не змінено. "
+                "Можна виправити проблему та повторити перезапуск.",
+                parent=self,
+            )
+            return
+
+        # Swap UI state only after the complete rebuild has been committed.
+        self.session = fresh
+        self.aliases = fresh.aliases
+        self.notebook.select(0)
+        self.destination_var.set(f"Підсумковий: {fresh.path}")
+        if fresh.current is None:
+            self.source_var.set("Вхідний файл не вибрано")
+            self._set_source_sheets([])
+            self._clear_tables()
+            self._refresh_destination_rows()
+            self.status_var.set(
+                "Повний перезапуск завершено: підсумкову таблицю очищено. "
+                "Вхідних файлів для повторного імпорту немає."
+            )
+        else:
+            last_source = self.opened_sources[-1]
+            self.source_var.set(
+                f"Вхідний: {last_source} → рядок {fresh.current.row}"
+            )
+            self._set_source_sheets(fresh.current.sheets)
+            self._refresh_tables()
+            self.status_var.set(
+                f"Повний перезапуск завершено: повторно імпортовано "
+                f"{len(self.opened_sources)} вхідних файлів. "
+                + self.status_var.get()
+            )
 
     def _set_source_sheets(self, sheets: list[str]) -> None:
         for panel in (self.review_sources, self.create_sources):

@@ -123,7 +123,9 @@ class DestinationResetTests(unittest.TestCase):
             destination_var=Mock(),
             source_var=Mock(),
             source_button=Mock(),
+            restart_button=Mock(),
             alias_button=Mock(),
+            opened_sources=[Path("/before/old.xlsx")],
             _set_source_sheets=Mock(),
             _clear_tables=Mock(),
             _refresh_destination_rows=Mock(),
@@ -137,6 +139,8 @@ class DestinationResetTests(unittest.TestCase):
         ):
             ExcelCopyApp.open_destination(app)
         fake_session.clear_previous_imports.assert_called_once_with()
+        self.assertEqual(app.opened_sources, [])
+        app.restart_button.configure.assert_called_once_with(state="normal")
         self.assertIs(app.session, fake_session)
         app._remember_directory.assert_called_once_with("destination", str(self.path))
 

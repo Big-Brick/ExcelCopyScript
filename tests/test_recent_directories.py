@@ -111,7 +111,9 @@ class RecentDirectoriesTests(unittest.TestCase):
             source_var=Mock(),
             status_var=Mock(),
             source_button=Mock(),
+            restart_button=Mock(),
             alias_button=Mock(),
+            opened_sources=[],
             _clear_tables=Mock(),
             _refresh_tables=Mock(),
             _set_source_sheets=Mock(),
@@ -134,6 +136,8 @@ class RecentDirectoriesTests(unittest.TestCase):
             RecentDirectories(self.config_path).initial_directory("source"),
             self.source_dir,
         )
+
+        self.assertEqual(app.opened_sources, [source_path])
 
         # A new app session will use the folder from the previous run.
         app.recent_directories = RecentDirectories(self.config_path)

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 from collections import Counter, defaultdict
 from pathlib import Path
+from typing import Sequence
 
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
@@ -44,6 +46,41 @@ class WorkbookSession:
                 legacy_template_id, self.template_id, self.fields
             )
         self.current: ImportResult | None = None
+
+    def restart_with_inputs(self, inputs: Sequence[Path]) -> "WorkbookSession":
+        """Rebuild the whole import from disk with current persisted aliases.
+
+        Work on a disposable workbook in the destination's directory, then
+        atomically replace the real file only after *all* inputs succeed. This
+        leaves both the original session and file untouched on any failure.
+        It creates no lasting backup file.
+        """
+        staged_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=self.path.parent, prefix=".excel-copy-restart-",
+                suffix=".xlsx", delete=False,
+            ) as stream:
+                staged_path = Path(stream.name)
+            shutil.copy2(self.path, staged_path)
+            fresh_aliases = AliasStore(self.aliases.path)
+            fresh = WorkbookSession(staged_path, fresh_aliases)
+            fresh.clear_previous_imports()
+            for index, filename in enumerate(inputs, start=1):
+                filename = Path(filename)
+                try:
+                    fresh.open_input(filename)
+                except Exception as exc:
+                    raise ValueError(
+                        f"Вхідний файл {index}/{len(inputs)} "
+                        f"«{filename.name}»: {exc}"
+                    ) from exc
+            os.replace(staged_path, self.path)
+            fresh.path = self.path
+            return fresh
+        finally:
+            if staged_path is not None:
+                staged_path.unlink(missing_ok=True)
 
     def clear_previous_imports(self) -> int:
         """Erase the writable output area when an existing destination is opened.
