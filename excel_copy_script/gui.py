@@ -23,7 +23,10 @@ class ExcelCopyApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Перенесення даних Excel")
-        self.geometry("1260x720")
+        # More vertical room for source rows. Fit smaller displays rather
+        # than opening below the bottom edge of the screen.
+        default_height = min(900, max(510, self.winfo_screenheight() - 80))
+        self.geometry(f"1260x{default_height}")
         self.minsize(900, 510)
         self.session: WorkbookSession | None = None
         self.aliases: AliasStore | None = None
@@ -123,12 +126,13 @@ class ExcelCopyApp(tk.Tk):
             create_actions, text="Копіювати вибрану пару + запам'ятати аліас",
             command=self.copy_selected, state="disabled",
         )
-        self.copy_button.pack(anchor="w")
+        # Put the hint next to the action instead of using a second row.
+        # This leaves more height for the source/destination Treeviews.
+        self.copy_button.pack(side="left")
         ttk.Label(
-            create_tab,
+            create_actions,
             text="Виберіть вихідний стовпчик, вхідний рядок і колонку значення C–G.",
-            padding=(4, 0, 4, 8),
-        ).pack(anchor="w")
+        ).pack(side="left", padx=(12, 0))
 
         status = ttk.Frame(self, padding=(12, 4, 12, 12))
         status.pack(fill="x")
