@@ -167,9 +167,14 @@ class WorkbookSession:
         for source in self.current.all_sources:
             if not source.name_valid:
                 continue
+            alias = self.aliases.get(self.template_id, source.name, source.sheet)
+            if alias is None:
+                continue
             destination, _ = self._alias_target_for(source)
-            if destination is not None:
-                targets[source.location] = f"{destination.letter}: {destination.name}"
+            targets[source.location] = (
+                f"{destination.letter}: {destination.name}"
+                if destination is not None else "Цільовий стовпчик не знайдено"
+            )
         return targets
 
     def _write(self, row: int, records: list[CopyRecord]) -> None:
@@ -211,42 +216,78 @@ class WorkbookSession:
         source_fields, warnings, sheet_names = self._read_source(Path(path))
         target_row = self.next_empty_row()
         eligible_sources = [field for field in source_fields if field.eligible]
-        # Unaliased fields are for manual pairing only: neither their names
-        # nor their duplicates should participate in automatic matching.
-        aliased_sources = []
-        for source in eligible_sources:
+        # Track why a saved alias did not result in a copy. In particular,
+        # an alias shown in the GUI does NOT mean this input was imported.
+        alias_issues: dict[tuple[str, int], str] = {}
+        valid_candidates: list[tuple[SourceField, DestinationField, int]] = []
+        for source in source_fields:
+            if not source.name_valid:
+                continue
+            alias = self.aliases.get(self.template_id, source.name, source.sheet)
+            if alias is None:
+                continue
             destination, column = self._alias_target_for(source)
-            if destination is not None:
-                aliased_sources.append((source, destination, column))
+            if destination is None:
+                alias_issues[source.location] = "Цільовий стовпчик аліаса не знайдено"
+            elif type(column) is not int or not 3 <= column <= 7:
+                alias_issues[source.location] = f"Недопустима колонка значення: {column}"
+            elif not nonempty(source.value_at(column)):
+                alias_issues[source.location] = (
+                    f"У колонці {get_column_letter(column)} немає значення для копіювання"
+                )
+            else:
+                valid_candidates.append((source, destination, column))
+
+        # Do not let another same-named row with an EMPTY aliased value block
+        # a valid candidate. Two genuinely populated candidates remain ambiguous.
         duplicates = Counter(
             (source.sheet.casefold(), source.key)
-            for source, _, _ in aliased_sources
+            for source, _, _ in valid_candidates
         )
         proposals: dict[int, list[CopyRecord]] = defaultdict(list)
-        for source, destination, column in aliased_sources:
+        for source, destination, column in valid_candidates:
             if duplicates[(source.sheet.casefold(), source.key)] > 1:
-                continue
-            if not 3 <= column <= 7:
-                warnings.append(f"{source.sheet}!B{source.row}: недопустимий стовпчик аліаса {column}")
-                continue
-            if not nonempty(source.value_at(column)):
-                warnings.append(
-                    f"{source.sheet}!{get_column_letter(column)}{source.row}: "
-                    "немає значення для копіювання"
+                alias_issues[source.location] = (
+                    "Декілька рядків із такою назвою на аркуші мають значення "
+                    "у колонці аліаса"
                 )
                 continue
             proposals[destination.column].append(
                 CopyRecord(source.using_column(column), destination, "Аліас")
             )
-        safe_matches = [matches[0] for matches in proposals.values() if len(matches) == 1]
+
+        safe_matches = []
+        for matches in proposals.values():
+            if len(matches) == 1:
+                safe_matches.append(matches[0])
+                continue
+            for record in matches:
+                alias_issues[record.source.location] = (
+                    "Кілька параметрів із аліасами претендують на цей вихідний стовпчик"
+                )
+
         safe_matches.sort(key=lambda rec: rec.destination.column)
         self._write(target_row, safe_matches)
-        result = ImportResult(filename=Path(path).name, row=target_row, copied=safe_matches,
-                              warnings=warnings, sheets=sheet_names, all_sources=source_fields)
+        result = ImportResult(
+            filename=Path(path).name, row=target_row,
+            copied=safe_matches, warnings=warnings,
+            sheets=sheet_names, all_sources=source_fields,
+            alias_issues=alias_issues,
+        )
         if any(count > 1 for count in duplicates.values()):
-            result.warnings.append("Повторювані назви в межах одного аркуша потребують ручного вибору")
+            result.warnings.append(
+                "Повторювані назви в межах одного аркуша потребують ручного вибору"
+            )
         if any(len(matches) > 1 for matches in proposals.values()):
-            result.warnings.append("Кілька вхідних параметрів претендують на один стовпчик — пропущено")
+            result.warnings.append(
+                "Кілька вхідних параметрів претендують на один стовпчик — пропущено"
+            )
+        for source in source_fields:
+            reason = alias_issues.get(source.location)
+            if reason:
+                result.warnings.append(
+                    f"{source.sheet}!B{source.row} «{source.name}»: {reason}"
+                )
         used_rows = {record.source.location for record in safe_matches}
         used_columns = {record.destination.column for record in safe_matches}
         result.unmatched_sources = [source for source in eligible_sources

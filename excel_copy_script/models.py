@@ -88,3 +88,4 @@ class ImportResult:
     warnings: list[str] = field(default_factory=list)
     sheets: list[str] = field(default_factory=list)
     all_sources: list[SourceField] = field(default_factory=list)
+    alias_issues: dict[tuple[str, int], str] = field(default_factory=dict)

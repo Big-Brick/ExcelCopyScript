@@ -24,6 +24,8 @@ class SourceRowsPanel(ttk.Frame):
         super().__init__(parent, padding=4)
         self._rows: list[SourceField] = []
         self._alias_targets: dict[tuple[str, int], str] = {}
+        self._copied_locations: set[tuple[str, int]] = set()
+        self._alias_issues: dict[tuple[str, int], str] = {}
         self._sources_by_item_id: dict[str, SourceField] = {}
         self._on_selection_changed = on_selection_changed
         self._syncing_selection = False
@@ -111,6 +113,12 @@ class SourceRowsPanel(ttk.Frame):
         for table in (self.tree, self.values_tree):
             table.tag_configure("unusable", background="#e5e5e5", foreground="#777777")
             table.tag_configure("aliased", background="#ddf2df")
+            table.tag_configure("skipped", background="#fff0c2")
+        self.issue_var = tk.StringVar(value="")
+        ttk.Label(
+            self, textvariable=self.issue_var,
+            foreground="#875800", wraplength=690,
+        ).pack(fill="x", pady=(4, 0))
 
     def _yview(self, *args) -> None:
         self.tree.yview(*args)
@@ -169,16 +177,24 @@ class SourceRowsPanel(ttk.Frame):
             SOURCE_SHEET if SOURCE_SHEET in sheets else (sheets[0] if sheets else "")
         )
         self.selected_value_column.set("C")
-        self.refresh([], alias_targets={})
+        self.refresh(
+            [], alias_targets={}, copied_locations=set(), alias_issues={},
+        )
 
     def refresh(
         self, rows: Sequence[SourceField] | None = None,
         alias_targets: dict[tuple[str, int], str] | None = None,
+        copied_locations: set[tuple[str, int]] | None = None,
+        alias_issues: dict[tuple[str, int], str] | None = None,
     ) -> None:
         if rows is not None:
             self._rows = list(rows)
         if alias_targets is not None:
             self._alias_targets = dict(alias_targets)
+        if copied_locations is not None:
+            self._copied_locations = set(copied_locations)
+        if alias_issues is not None:
+            self._alias_issues = dict(alias_issues)
         self._sources_by_item_id.clear()
         self.tree.delete(*self.tree.get_children())
         self.values_tree.delete(*self.values_tree.get_children())
@@ -187,7 +203,13 @@ class SourceRowsPanel(ttk.Frame):
                 continue
             item = f"row-{source.row}"
             target = self._alias_targets.get(source.location, "")
-            tag = ("aliased",) if target else (() if source.eligible else ("unusable",))
+            if source.location in self._copied_locations:
+                tag = ("aliased",)
+            elif target:
+                tag = ("skipped",)
+                target = f"⚠ {target}"
+            else:
+                tag = () if source.eligible else ("unusable",)
             self.tree.insert(
                 "", "end", iid=item,
                 values=(target, source.row, source.name), tags=tag,
@@ -214,5 +236,10 @@ class SourceRowsPanel(ttk.Frame):
         self.refresh()
 
     def _notify_selection(self, _event=None) -> None:
+        selected = self.selected_source()
+        issue = self._alias_issues.get(selected.location) if selected else None
+        self.issue_var.set(
+            f"⚠ {selected.sheet}!B{selected.row}: {issue}" if issue else ""
+        )
         if self._on_selection_changed is not None:
             self._on_selection_changed()

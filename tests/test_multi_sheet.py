@@ -283,6 +283,9 @@ class SheetSelectorTests(unittest.TestCase):
             _rows=[],
             _sources_by_item_id={},
             _alias_targets={},
+            _copied_locations=set(),
+            _alias_issues={},
+            issue_var=self.FakeVar(),
             _on_selection_changed=Mock(),
             selected_sheet=self.FakeVar(),
             selected_value_column=self.FakeVar(),
@@ -291,9 +294,11 @@ class SheetSelectorTests(unittest.TestCase):
             values_tree=self.FakeTree(),
             COLUMNS=tuple(range(3, 8)),
         )
-        panel.refresh = lambda rows=None, alias_targets=None: SourceRowsPanel.refresh(
-            panel, rows, alias_targets=alias_targets
+        panel.refresh = lambda rows=None, alias_targets=None, copied_locations=None, alias_issues=None: SourceRowsPanel.refresh(
+            panel, rows, alias_targets=alias_targets,
+            copied_locations=copied_locations, alias_issues=alias_issues,
         )
+        panel.selected_source = lambda: SourceRowsPanel.selected_source(panel)
         panel.set_sheets = lambda sheets: SourceRowsPanel.set_sheets(panel, sheets)
         panel._notify_selection = lambda: SourceRowsPanel._notify_selection(panel)
         return panel
@@ -341,7 +346,10 @@ class SheetSelectorTests(unittest.TestCase):
                         values=(None, None, 42, None, None)),
             SourceField(3, "Звичайний", 17, sheet=SOURCE_SHEET),
         ]
-        panel.refresh(fields, alias_targets={(SOURCE_SHEET.casefold(), 2): "D: Резерв"})
+        panel.refresh(
+            fields, alias_targets={(SOURCE_SHEET.casefold(), 2): "D: Резерв"},
+            copied_locations={(SOURCE_SHEET.casefold(), 2)},
+        )
         self.assertEqual(list(panel.tree.rows.values()), [
             ("", 1, ""), ("D: Резерв", 2, "Наявний аліас"),
             ("", 3, "Звичайний"),

@@ -454,8 +454,16 @@ class ExcelCopyApp(tk.Tk):
         result = self.session.current if self.session is not None else None
         rows = result.all_sources if result is not None else []
         targets = self.session.source_alias_targets() if result is not None else {}
+        issues = result.alias_issues if result is not None else {}
+        copied = {
+            record.source.location for record in result.copied
+            if self._record_has_alias(record)
+        } if result is not None else set()
         for panel in (self.review_sources, self.create_sources):
-            panel.refresh(rows, alias_targets=targets)
+            panel.refresh(
+                rows, alias_targets=targets,
+                copied_locations=copied, alias_issues=issues,
+            )
 
     def _refresh_tables(self) -> None:
         self._clear_tables()
@@ -469,7 +477,8 @@ class ExcelCopyApp(tk.Tk):
         status = (
             f"{result.filename} → рядок {result.row}. Скопійовано: {len(result.copied)}; "
             f"не зіставлено вихідних стовпчиків: {len(result.unmatched_destinations)}; "
-            f"вхідних рядків: {len(result.unmatched_sources)}. Зміни автоматично збережено."
+            f"вхідних рядків: {len(result.unmatched_sources)}; "
+            f"пропущено аліасів: {len(result.alias_issues)}. Зміни автоматично збережено."
         )
         if result.warnings:
             status += " Увага: " + "; ".join(result.warnings[:4])
