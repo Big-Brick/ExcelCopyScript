@@ -67,6 +67,10 @@ class SourceRowsPanel(ttk.Frame):
             self.tree.heading(key, text=title)
             self.tree.column(key, width=width, minwidth=50, stretch=False)
         self.tree.pack(fill="both", expand=True)
+        # Reserve exactly the same height as the right-hand horizontal scrollbar,
+        # so both Treeviews have identical visible row heights and remain aligned.
+        frozen_spacer = ttk.Frame(fixed)
+        frozen_spacer.pack(fill="x")
 
         scrollable = ttk.Frame(container)
         scrollable.pack(side="left", fill="both", expand=True)
@@ -83,6 +87,7 @@ class SourceRowsPanel(ttk.Frame):
         self.values_tree.configure(xscrollcommand=xscroll.set)
         self.values_tree.pack(fill="both", expand=True)
         xscroll.pack(fill="x")
+        frozen_spacer.configure(height=xscroll.winfo_reqheight())
 
         vertical = ttk.Scrollbar(container, orient="vertical", command=self._yview)
         vertical.pack(side="right", fill="y")
