@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 
 from openpyxl.utils import get_column_letter
 
+from .config import SOURCE_SHEET
 from .utils import normalize
 
 @dataclass(frozen=True)
@@ -27,10 +28,15 @@ class SourceField:
     row: int
     name: str
     value: object
+    sheet: str = SOURCE_SHEET
 
     @property
     def key(self) -> str:
         return normalize(self.name)
+
+    @property
+    def location(self) -> tuple[str, int]:
+        return normalize(self.sheet), self.row
 
 
 
@@ -42,6 +48,7 @@ class AliasEntry:
     source_name: str
     destination_key: str
     destination_column: int | None
+    sheet: str = SOURCE_SHEET
 
 @dataclass(frozen=True)
 class CopyRecord:

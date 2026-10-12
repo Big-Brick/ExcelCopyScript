@@ -68,21 +68,28 @@ class WorkbookSession:
                 raise ValueError(f"У файлі {path.name} немає аркуша «{SOURCE_SHEET}»")
             # Read formula metadata separately: openpyxl does not calculate formulas.
             formulas = load_workbook(path, read_only=True, data_only=False)
-            cached_ws = cached[SOURCE_SHEET]
-            formula_ws = formulas[SOURCE_SHEET]
             entries: list[SourceField] = []
             warnings: list[str] = []
-            for row, (name, cached_value) in enumerate(
-                cached_ws.iter_rows(min_col=2, max_col=3, values_only=True), start=1
-            ):
-                if not isinstance(name, str) or not name.strip():
-                    continue
-                if not nonempty(cached_value):
-                    formula_cell = formula_ws.cell(row, 3)
-                    if formula_cell.data_type == "f":
-                        warnings.append(f"C{row}: формула без збереженого результату — пропущено")
-                    continue
-                entries.append(SourceField(row, name.strip(), cached_value))
+            # Process ВИСНОВКИ first, then all other worksheets. All worksheets
+            # use the same B (field name) / C (cached value) layout.
+            sheet_names = [SOURCE_SHEET] + [name for name in cached.sheetnames
+                                           if name != SOURCE_SHEET]
+            for sheet_name in sheet_names:
+                cached_ws = cached[sheet_name]
+                formula_ws = formulas[sheet_name]
+                for row, (name, cached_value) in enumerate(
+                    cached_ws.iter_rows(min_col=2, max_col=3, values_only=True), start=1
+                ):
+                    if not isinstance(name, str) or not name.strip():
+                        continue
+                    if not nonempty(cached_value):
+                        formula_cell = formula_ws.cell(row, 3)
+                        if formula_cell.data_type == "f":
+                            warnings.append(
+                                f"{sheet_name}!C{row}: формула без збереженого результату — пропущено"
+                            )
+                        continue
+                    entries.append(SourceField(row, name.strip(), cached_value, sheet=sheet_name))
             return entries, warnings
         finally:
             cached.close()
@@ -90,7 +97,7 @@ class WorkbookSession:
                 formulas.close()
 
     def _destination_for(self, source: SourceField) -> tuple[DestinationField | None, str]:
-        alias = self.aliases.get(self.template_id, source.name)
+        alias = self.aliases.get(self.template_id, source.name, source.sheet)
         if alias:
             candidates = [field for field in self.fields if field.key == alias.get("header")]
             if len(candidates) == 1:
@@ -99,9 +106,10 @@ class WorkbookSession:
                 pinned = [field for field in candidates if field.column == alias.get("column")]
                 if len(pinned) == 1:
                     return pinned[0], "Аліас"
-        exact = [field for field in self.fields if field.key == source.key]
-        if len(exact) == 1:
-            return exact[0], "Збіг назви"
+        if source.sheet == SOURCE_SHEET:
+            exact = [field for field in self.fields if field.key == source.key]
+            if len(exact) == 1:
+                return exact[0], "Збіг назви"
         return None, ""
 
     def _write(self, row: int, records: list[CopyRecord]) -> None:
@@ -145,10 +153,10 @@ class WorkbookSession:
     def open_input(self, path: Path) -> ImportResult:
         source_fields, warnings = self._read_source(Path(path))
         target_row = self.next_empty_row()
-        duplicates = Counter(field.key for field in source_fields)
+        duplicates = Counter((field.sheet.casefold(), field.key) for field in source_fields)
         proposals: dict[int, list[CopyRecord]] = defaultdict(list)
         for source in source_fields:
-            if duplicates[source.key] > 1:
+            if duplicates[(source.sheet.casefold(), source.key)] > 1:
                 continue
             destination, method = self._destination_for(source)
             if destination is not None:
@@ -162,18 +170,22 @@ class WorkbookSession:
             result.warnings.append("Повторювані назви у вхідному файлі не зіставлено автоматично")
         if any(len(matches) > 1 for matches in proposals.values()):
             result.warnings.append("Кілька вхідних параметрів претендують на один стовпчик — пропущено")
-        used_rows = {record.source.row for record in safe_matches}
+        used_rows = {record.source.location for record in safe_matches}
         used_columns = {record.destination.column for record in safe_matches}
-        result.unmatched_sources = [source for source in source_fields if source.row not in used_rows]
+        result.unmatched_sources = [source for source in source_fields
+                                    if source.location not in used_rows]
         result.unmatched_destinations = [dest for dest in self.fields if dest.column not in used_columns]
         self.current = result
         return result
 
-    def copy_manually(self, source_row: int, destination_col: int) -> str | None:
+    def copy_manually(
+        self, source_row: int, destination_col: int, sheet: str = SOURCE_SHEET
+    ) -> str | None:
         result = self.current
         if result is None:
             raise ValueError("Спочатку відкрийте вхідний файл")
-        source = next((s for s in result.unmatched_sources if s.row == source_row), None)
+        source = next((s for s in result.unmatched_sources
+                       if s.row == source_row and s.sheet.casefold() == sheet.casefold()), None)
         destination = next((d for d in result.unmatched_destinations if d.column == destination_col), None)
         if source is None or destination is None:
             raise ValueError("Вибраний параметр уже був скопійований")

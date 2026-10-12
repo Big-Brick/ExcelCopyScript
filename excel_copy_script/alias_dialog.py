@@ -53,13 +53,14 @@ class AliasManagerDialog(tk.Toplevel):
         table_frame.pack(fill="both", expand=True)
         self.tree = ttk.Treeview(
             table_frame,
-            columns=("source", "destination", "column"),
+            columns=("sheet", "source", "destination", "column"),
             show="headings",
             selectmode="browse",
         )
         for column, title, width in (
-            ("source", "Назва у вхідному файлі", 320),
-            ("destination", "Назва у підсумковому файлі", 340),
+            ("sheet", "Вхідний аркуш", 155),
+            ("source", "Назва у вхідному файлі", 260),
+            ("destination", "Назва у підсумковому файлі", 260),
             ("column", "Стовпчик", 85),
         ):
             self.tree.heading(column, text=title)
@@ -96,13 +97,15 @@ class AliasManagerDialog(tk.Toplevel):
 
     def _refresh(self) -> None:
         self.tree.delete(*self.tree.get_children())
+        self._items: dict[str, AliasEntry] = {}
         entries = self.aliases.list_for_template(self.template_id)
         for entry in entries:
             target_name, column = self._target_display(entry)
-            self.tree.insert(
-                "", "end", iid=entry.source_key,
-                values=(entry.source_name, target_name, column),
+            item_id = self.tree.insert(
+                "", "end",
+                values=(entry.sheet, entry.source_name, target_name, column),
             )
+            self._items[item_id] = entry
         self.count_label.configure(text=f"Збережено аліасів: {len(entries)}")
         self._on_selection()
 
@@ -119,19 +122,18 @@ class AliasManagerDialog(tk.Toplevel):
         selection = self.tree.selection()
         if not selection:
             return
-        key = selection[0]
-        label = self.tree.item(key, "values")
-        source_name = label[0] if label else key
-        destination_name = label[1] if label else ""
+        entry = self._items[selection[0]]
+        label = self.tree.item(selection[0], "values")
+        destination_name = label[2] if label else ""
         if not messagebox.askyesno(
             "Підтвердження видалення",
-            f"Видалити аліас «{source_name}» → «{destination_name}»?\n\n"
+            f"Видалити аліас «{entry.sheet}!{entry.source_name}» → «{destination_name}»?\n\n"
             "Подальші імпорти більше не використовуватимуть цю відповідність.",
             parent=self,
         ):
             return
         try:
-            self.aliases.delete(self.template_id, key)
+            self.aliases.delete(self.template_id, entry.source_key, sheet=entry.sheet)
         except (OSError, ValueError) as exc:
             messagebox.showerror("Помилка видалення аліаса", str(exc), parent=self)
             return

@@ -174,7 +174,7 @@ class TransferTests(unittest.TestCase):
     def test_conflicting_candidates_do_not_overwrite_each_other(self):
         source = self.source("conflict.xlsx", [(1, "Техніка", 11), (2, "Запас техніки", 22)])
         self.aliases.set(self.session.template_id,
-                         type("S", (), {"key": normalize("Запас техніки")})(), self.session.fields[1])
+                         SourceField(2, "Запас техніки", 22), self.session.fields[1])
         result = self.session.open_input(source)
         self.assertFalse(result.copied)
         self.assertEqual(len(result.unmatched_sources), 2)
@@ -228,7 +228,7 @@ class TransferTests(unittest.TestCase):
         self.session.copy_manually(1, 3)
         self.session.copy_manually(2, 2)
         self.aliases.set("other-template",
-                         type("S", (), {"key": normalize("Альтернативна назва"), "name": "Альтернативна назва"})(),
+                         SourceField(1, "Альтернативна назва", 10),
                          self.session.fields[1])
         self.assertTrue(self.aliases.delete(template_id, "Бронетехніка"))
         self.assertIsNotNone(self.aliases.get(template_id, "Бійці"))
@@ -243,7 +243,7 @@ class TransferTests(unittest.TestCase):
 
         template_id = self.session.template_id
         self.aliases.set(template_id,
-                         type("S", (), {"key": normalize("Бронетехніка"), "name": "Бронетехніка"})(),
+                         SourceField(1, "Бронетехніка", 10),
                          self.session.fields[1])
         with patch.object(self.aliases, "_save", side_effect=OSError("disk full")):
             with self.assertRaises(OSError):

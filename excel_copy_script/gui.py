@@ -21,6 +21,7 @@ class ExcelCopyApp(tk.Tk):
         self.minsize(900, 510)
         self.session: WorkbookSession | None = None
         self.aliases: AliasStore | None = None
+        self._unmatched_source_ids: dict[str, tuple[str, int]] = {}
         self.recent_directories = RecentDirectories()
         self.destination_var = tk.StringVar(value="Підсумковий файл не вибрано")
         self.source_var = tk.StringVar(value="Вхідний файл не вибрано")
@@ -49,7 +50,8 @@ class ExcelCopyApp(tk.Tk):
         destination_frame, self.destination_tree = self._make_table(
             panes, "Без відповідника: вихідні стовпчики", ("Колонка", "Назва"), (80, 260))
         source_frame, self.source_tree = self._make_table(
-            panes, "Без відповідника: вхідні рядки", ("Рядок", "Назва", "Значення"), (70, 240, 110))
+            panes, "Без відповідника: вхідні рядки",
+            ("Аркуш", "Рядок", "Назва", "Значення"), (130, 70, 200, 110))
         for frame in (copied_frame, destination_frame, source_frame):
             panes.add(frame, weight=1)
 
@@ -144,6 +146,7 @@ class ExcelCopyApp(tk.Tk):
         self._refresh_tables()
 
     def _clear_tables(self):
+        self._unmatched_source_ids.clear()
         for tree in (self.copied_tree, self.destination_tree, self.source_tree):
             tree.delete(*tree.get_children())
         self._on_selection()
@@ -154,12 +157,16 @@ class ExcelCopyApp(tk.Tk):
             return
         result = self.session.current
         for record in result.copied:
-            self.copied_tree.insert("", "end", values=(f"B{record.source.row}: {record.source.name}",
+            self.copied_tree.insert("", "end", values=(f"{record.source.sheet}!B{record.source.row}: {record.source.name}",
                 f"{record.destination.letter}: {record.destination.name}", present(record.source.value), record.method))
         for dest in result.unmatched_destinations:
             self.destination_tree.insert("", "end", iid=str(dest.column), values=(dest.letter, dest.name))
         for source in result.unmatched_sources:
-            self.source_tree.insert("", "end", iid=str(source.row), values=(source.row, source.name, present(source.value)))
+            item_id = self.source_tree.insert(
+                "", "end",
+                values=(source.sheet, source.row, source.name, present(source.value)),
+            )
+            self._unmatched_source_ids[item_id] = (source.sheet, source.row)
         status = (f"{result.filename} → рядок {result.row}. Скопійовано: {len(result.copied)}; "
                   f"не зіставлено вихідних стовпчиків: {len(result.unmatched_destinations)}; "
                   f"вхідних рядків: {len(result.unmatched_sources)}. Зміни автоматично збережено.")
@@ -174,7 +181,8 @@ class ExcelCopyApp(tk.Tk):
         if not sources or not destinations:
             return
         try:
-            warning = self.session.copy_manually(int(sources[0]), int(destinations[0]))
+            sheet, row = self._unmatched_source_ids[sources[0]]
+            warning = self.session.copy_manually(row, int(destinations[0]), sheet=sheet)
         except Exception as exc:
             messagebox.showerror("Помилка копіювання", str(exc))
             return

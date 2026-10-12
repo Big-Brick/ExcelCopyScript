@@ -1,142 +1,167 @@
-"""ExcelCopyScript: interactive transfer from ВИСНОВКИ to Дані_підрозділів."""
+"""Read, write and migrate sheet-scoped aliases for a destination template."""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import os
+import shutil
 import tempfile
 from pathlib import Path
 
+from .config import SOURCE_SHEET
+from .migrations import CURRENT_VERSION, migrate_alias_data
 from .models import AliasEntry, DestinationField, SourceField
 from .utils import normalize
 
+
 class AliasStore:
-    """Persistent input-name -> destination-header mapping, scoped to a header set."""
+    """Aliases indexed by destination template, source sheet and parameter."""
 
     def __init__(self, path: Path | None = None):
         self.path = path or (Path.home() / ".config" / "excel-copy-script" / "aliases.json")
         if self.path.exists():
             try:
-                data = json.loads(self.path.read_text(encoding="utf-8"))
+                raw = json.loads(self.path.read_text(encoding="utf-8"))
             except (OSError, ValueError) as exc:
                 raise ValueError(f"Не вдалося прочитати файл аліасів {self.path}: {exc}") from exc
-            if not isinstance(data, dict) or data.get("version") != 1 or not isinstance(data.get("templates"), dict):
-                raise ValueError(f"Непідтримуваний формат файлу аліасів: {self.path}")
-            self.data = data
+            try:
+                self.data, migrated = migrate_alias_data(raw)
+            except ValueError as exc:
+                raise ValueError(f"Непідтримуваний формат файлу аліасів {self.path}: {exc}") from exc
+            if migrated:
+                # Keep the exact pre-migration JSON as a one-time backup.
+                backup = self.path.with_name(self.path.name + ".v1.bak")
+                if not backup.exists():
+                    shutil.copy2(self.path, backup)
+                self._save()
         else:
-            self.data = {"version": 1, "templates": {}}
+            self.data = {"version": CURRENT_VERSION, "templates": {}}
 
     @staticmethod
     def template_id(fields: list[DestinationField]) -> str:
         headers = sorted(field.key for field in fields)
         return hashlib.sha256(json.dumps(headers, ensure_ascii=False).encode("utf-8")).hexdigest()
 
-    def get(self, template_id: str, source_name: str) -> dict | None:
-        entry = self.data["templates"].get(template_id, {}).get(normalize(source_name))
+    def get(self, template_id: str, source_name: str, sheet: str = SOURCE_SHEET) -> dict | None:
+        entry = (self.data["templates"].get(template_id, {})
+                 .get(normalize(sheet), {}).get(normalize(source_name)))
         return entry if isinstance(entry, dict) else None
 
     def list_for_template(self, template_id: str) -> list[AliasEntry]:
-        """Return stored aliases for a destination template, including legacy records."""
-        template = self.data["templates"].get(template_id, {})
+        """List alias mappings from every sheet for the current destination template."""
         entries = []
-        for key, value in template.items():
-            if not isinstance(value, dict):
-                continue
-            entries.append(AliasEntry(
-                source_key=key,
-                source_name=value.get("source_name") or key,
-                destination_key=value.get("header", ""),
-                destination_column=value.get("column"),
-            ))
-        return sorted(entries, key=lambda entry: entry.source_name.casefold())
+        for sheet_key, mappings in self.data["templates"].get(template_id, {}).items():
+            for source_key, record in mappings.items():
+                if not isinstance(record, dict):
+                    continue
+                entries.append(AliasEntry(
+                    source_key=source_key,
+                    source_name=record.get("source_name") or source_key,
+                    destination_key=record.get("header", ""),
+                    destination_column=record.get("column"),
+                    sheet=record.get("sheet_name") or sheet_key,
+                ))
+        return sorted(entries, key=lambda e: (e.sheet.casefold(), e.source_name.casefold()))
 
     def migrate_legacy_template(
         self, legacy_id: str, current_id: str, fields: list[DestinationField]
     ) -> None:
-        """Copy usable aliases from pre-column-A-exclusion templates.
+        """Move aliases from a template that included ordinal column A.
 
-        Preserve existing mappings in the new template. A mapping that used to
-        point at the ordinal column is never eligible for migration.
+        Keeping the old template would resurrect deleted aliases on next launch,
+        so remove the obsolete key after migrating usable mappings.
         """
         if legacy_id == current_id:
             return
         templates = self.data["templates"]
-        legacy = templates.get(legacy_id)
-        if not isinstance(legacy, dict) or not legacy:
+        old = templates.get(legacy_id)
+        if not isinstance(old, dict) or not old:
             return
 
-        valid = {}
-        for source_key, entry in legacy.items():
-            if not isinstance(entry, dict) or entry.get("column") == 1:
-                continue
-            candidates = [field for field in fields if field.key == entry.get("header")]
-            if len(candidates) == 1 or (
-                len(candidates) > 1
-                and any(field.column == entry.get("column") for field in candidates)
-            ):
-                valid[source_key] = entry
-        if not valid:
-            return
+        valid: dict[str, dict] = {}
+        for sheet_key, entries in old.items():
+            valid_entries = {}
+            for source_key, record in entries.items():
+                if not isinstance(record, dict) or record.get("column") == 1:
+                    continue
+                candidates = [field for field in fields if field.key == record.get("header")]
+                if len(candidates) == 1 or (
+                    len(candidates) > 1
+                    and any(field.column == record.get("column") for field in candidates)
+                ):
+                    valid_entries[source_key] = record
+            if valid_entries:
+                valid[sheet_key] = valid_entries
 
-        previous = templates.get(current_id)
-        merged = {**valid, **(previous or {})}
-        if previous == merged:
-            return
-        templates[current_id] = merged
+        original_current = templates.get(current_id)
+        merged = {sheet: dict(entries) for sheet, entries in valid.items()}
+        for sheet, entries in (original_current or {}).items():
+            merged.setdefault(sheet, {}).update(entries)
+
+        templates.pop(legacy_id)
+        if merged:
+            templates[current_id] = merged
         try:
             self._save()
         except Exception:
-            if previous is None:
-                del templates[current_id]
+            templates[legacy_id] = old
+            if original_current is None:
+                templates.pop(current_id, None)
             else:
-                templates[current_id] = previous
+                templates[current_id] = original_current
             raise
 
-    def delete(self, template_id: str, source_name: str) -> bool:
-        """Delete one alias and persist it; restore memory state on write failure.
-
-        Returns False when the alias doesn't exist (no file write).
-        """
-        key = normalize(source_name)
-        template = self.data["templates"].get(template_id)
-        if template is None or key not in template:
+    def delete(self, template_id: str, source_name: str, sheet: str = SOURCE_SHEET) -> bool:
+        """Delete only the selected (sheet, parameter) alias."""
+        templates = self.data["templates"]
+        template = templates.get(template_id)
+        sheet_key, source_key = normalize(sheet), normalize(source_name)
+        if not template or source_key not in template.get(sheet_key, {}):
             return False
-
-        removed = template.pop(key)
-        empty = not template
-        if empty:
-            del self.data["templates"][template_id]
+        mappings = template[sheet_key]
+        old = mappings.pop(source_key)
+        if not mappings:
+            del template[sheet_key]
+        if not template:
+            del templates[template_id]
         try:
             self._save()
         except Exception:
-            if empty:
-                self.data["templates"][template_id] = template
-            template[key] = removed
+            templates.setdefault(template_id, {}).setdefault(sheet_key, {})[source_key] = old
             raise
         return True
 
     def set(self, template_id: str, source: SourceField, destination: DestinationField) -> None:
-        key = source.key
+        sheet_key, source_key = normalize(source.sheet), source.key
         template = self.data["templates"].setdefault(template_id, {})
-        previous = template.get(key)
-        template[key] = {"header": destination.key, "column": destination.column,
-                         "source_name": source.name if hasattr(source, "name") else key}
+        mappings = template.setdefault(sheet_key, {})
+        old = mappings.get(source_key)
+        mappings[source_key] = {
+            "header": destination.key, "column": destination.column,
+            "source_name": source.name, "sheet_name": source.sheet,
+        }
         try:
             self._save()
         except Exception:
-            if previous is None:
-                del template[key]
+            if old is None:
+                del mappings[source_key]
+                if not mappings:
+                    del template[sheet_key]
+                if not template:
+                    del self.data["templates"][template_id]
             else:
-                template[key] = previous
+                mappings[source_key] = old
             raise
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = None
         try:
-            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.path.parent,
-                                             prefix=".aliases-", suffix=".tmp", delete=False) as stream:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=self.path.parent,
+                prefix=".aliases-", suffix=".tmp", delete=False
+            ) as stream:
                 tmp_path = Path(stream.name)
                 json.dump(self.data, stream, ensure_ascii=False, indent=2)
                 stream.write("\n")
