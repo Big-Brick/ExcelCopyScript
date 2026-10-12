@@ -153,9 +153,10 @@ class MultiSheetTests(unittest.TestCase):
         session = Mock()
         app = SimpleNamespace(
             session=session,
-            source_tree=Mock(selection=Mock(return_value=("I22",))),
+            create_sources=Mock(selected_source=Mock(
+                return_value=SourceField(3, "Показник", 42, sheet="Склад"),
+            )),
             destination_tree=Mock(selection=Mock(return_value=("4",))),
-            _unmatched_source_ids={"I22": ("Склад", 3)},
             _refresh_tables=Mock(),
         )
         session.copy_manually.return_value = None
@@ -165,7 +166,7 @@ class MultiSheetTests(unittest.TestCase):
 
 
 class SheetSelectorTests(unittest.TestCase):
-    """Test sheet filtering without requiring an X server."""
+    """Exercise two independent source panels without requiring an X server."""
 
     class FakeVar:
         def __init__(self):
@@ -184,108 +185,187 @@ class SheetSelectorTests(unittest.TestCase):
             self.counter = 0
 
         def get_children(self):
-            return list(self.rows)
+            return tuple(self.rows)
 
         def delete(self, *items):
             for item in items:
                 self.rows.pop(item, None)
             self.selected = ()
 
-        def insert(self, _parent, _position, values):
+        def insert(self, _parent, _position, values, iid=None):
             self.counter += 1
-            item_id = f"row{self.counter}"
+            item_id = iid or f"row{self.counter}"
             self.rows[item_id] = tuple(values)
             return item_id
 
         def selection(self):
             return self.selected
 
-    def make_ui(self, result):
-        app = SimpleNamespace(
-            session=SimpleNamespace(current=result),
-            _unmatched_source_ids={},
-            selected_source_sheet=self.FakeVar(),
-            source_sheet_combo=Mock(),
-            source_tree=self.FakeTree(),
-            _on_selection=Mock(),
+    def make_panel(self):
+        from excel_copy_script.source_rows_panel import SourceRowsPanel
+
+        panel = SimpleNamespace(
+            _rows=[],
+            _sources_by_item_id={},
+            _on_selection_changed=Mock(),
+            selected_sheet=self.FakeVar(),
+            sheet_combo=Mock(),
+            tree=self.FakeTree(),
         )
-        app._refresh_source_rows = lambda: ExcelCopyApp._refresh_source_rows(app)
-        return app
+        panel.refresh = lambda rows=None: SourceRowsPanel.refresh(panel, rows)
+        panel._notify_selection = lambda: SourceRowsPanel._notify_selection(panel)
+        return panel
 
-    def test_filter_and_sheet_change_only_refreshes_source_rows(self):
-        from excel_copy_script.models import ImportResult
+    def test_each_tab_filters_the_same_rows_independently(self):
+        from excel_copy_script.source_rows_panel import SourceRowsPanel
 
-        result = ImportResult(filename="file.xlsx", row=4, sheets=[
-            SOURCE_SHEET, "Склад", "Порожній",
-        ], unmatched_sources=[
+        fields = [
             SourceField(2, "Перший", 11, sheet=SOURCE_SHEET),
             SourceField(2, "Другий", 22, sheet="Склад"),
             SourceField(3, "Третій", 33, sheet="Склад"),
-        ])
-        app = self.make_ui(result)
-        ExcelCopyApp._set_source_sheets(app, result.sheets)
-        app.source_sheet_combo.configure.assert_called_with(
-            values=[SOURCE_SHEET, "Склад", "Порожній"], state="readonly",
-        )
-        self.assertEqual(app.selected_source_sheet.get(), SOURCE_SHEET)
-        ExcelCopyApp._refresh_source_rows(app)
-        self.assertEqual(list(app.source_tree.rows.values()), [(2, "Перший", "11")])
-        app.selected_source_sheet.set("Склад")
-        ExcelCopyApp._on_source_sheet_changed(app)
-        self.assertEqual(list(app.source_tree.rows.values()), [
+        ]
+        review, create = self.make_panel(), self.make_panel()
+        for panel in (review, create):
+            SourceRowsPanel.set_sheets(panel, [SOURCE_SHEET, "Склад", "Порожній"])
+            panel.refresh(fields)
+            self.assertEqual(panel.selected_sheet.get(), SOURCE_SHEET)
+            self.assertEqual(list(panel.tree.rows.values()), [(2, "Перший", "11")])
+            panel.sheet_combo.configure.assert_called_with(
+                values=[SOURCE_SHEET, "Склад", "Порожній"], state="readonly",
+            )
+
+        review.selected_sheet.set("Склад")
+        SourceRowsPanel._on_sheet_changed(review)
+        self.assertEqual(list(review.tree.rows.values()), [
             (2, "Другий", "22"), (3, "Третій", "33"),
         ])
-        self.assertEqual(set(app._unmatched_source_ids.values()), {
-            ("Склад", 2), ("Склад", 3),
-        })
-        self.assertEqual(app.source_tree.selection(), ())
-        app.selected_source_sheet.set("Порожній")
-        ExcelCopyApp._on_source_sheet_changed(app)
-        self.assertEqual(app.source_tree.rows, {})
-        self.assertEqual(app._unmatched_source_ids, {})
-        self.assertGreaterEqual(app._on_selection.call_count, 3)
+        self.assertEqual(list(create.tree.rows.values()), [(2, "Перший", "11")])
 
-    def test_manual_copy_uses_correct_sheet_after_selection(self):
-        from excel_copy_script.models import ImportResult
+        review.selected_sheet.set("Порожній")
+        SourceRowsPanel._on_sheet_changed(review)
+        self.assertEqual(review.tree.rows, {})
+        self.assertEqual(review._sources_by_item_id, {})
+        self.assertGreaterEqual(review._on_selection_changed.call_count, 3)
 
-        result = ImportResult(filename="file.xlsx", row=4, sheets=[
-            SOURCE_SHEET, "Склад",
-        ], unmatched_sources=[
+    def test_selection_keeps_sheet_identity_and_resets_when_filtered(self):
+        from excel_copy_script.source_rows_panel import SourceRowsPanel
+
+        panel = self.make_panel()
+        SourceRowsPanel.set_sheets(panel, [SOURCE_SHEET, "Склад"])
+        panel.refresh([
             SourceField(2, "Спільне", 1, sheet=SOURCE_SHEET),
             SourceField(2, "Спільне", 2, sheet="Склад"),
         ])
-        app = self.make_ui(result)
-        session = Mock()
-        session.current = result
-        session.copy_manually.return_value = None
-        app.session = session
-        app.destination_tree = Mock()
-        app.destination_tree.selection.return_value = ("3",)
-        app._refresh_tables = Mock()
-        ExcelCopyApp._set_source_sheets(app, result.sheets)
-        app.selected_source_sheet.set("Склад")
-        ExcelCopyApp._refresh_source_rows(app)
-        app.source_tree.selected = (next(iter(app.source_tree.rows)),)
-        ExcelCopyApp.copy_selected(app)
-        session.copy_manually.assert_called_once_with(2, 3, sheet="Склад")
-        app.selected_source_sheet.set(SOURCE_SHEET)
-        ExcelCopyApp._refresh_source_rows(app)
-        app.source_tree.selected = (next(iter(app.source_tree.rows)),)
-        ExcelCopyApp.copy_selected(app)
-        session.copy_manually.assert_called_with(2, 3, sheet=SOURCE_SHEET)
+        panel.selected_sheet.set("Склад")
+        SourceRowsPanel._on_sheet_changed(panel)
+        panel.tree.selected = (next(iter(panel.tree.rows)),)
+        selected = SourceRowsPanel.selected_source(panel)
+        self.assertEqual((selected.sheet, selected.row), ("Склад", 2))
+        panel.refresh([])
+        self.assertIsNone(SourceRowsPanel.selected_source(panel))
+        self.assertEqual(panel.selected_sheet.get(), "Склад")
 
-    def test_selector_reset_for_another_workbook(self):
-        result = SimpleNamespace(sheets=[SOURCE_SHEET, "Склад"])
-        app = self.make_ui(result)
-        ExcelCopyApp._set_source_sheets(app, result.sheets)
-        app.selected_source_sheet.set("Склад")
+    def test_both_selectors_reset_when_next_file_opens(self):
+        from excel_copy_script.source_rows_panel import SourceRowsPanel
+
+        review, create = self.make_panel(), self.make_panel()
+        app = SimpleNamespace(review_sources=review, create_sources=create)
+        ExcelCopyApp._set_source_sheets(app, [SOURCE_SHEET, "Склад"])
+        review.selected_sheet.set("Склад")
+        create.selected_sheet.set("Склад")
         ExcelCopyApp._set_source_sheets(app, [SOURCE_SHEET, "Поточний"])
-        self.assertEqual(app.selected_source_sheet.get(), SOURCE_SHEET)
+        self.assertEqual(review.selected_sheet.get(), SOURCE_SHEET)
+        self.assertEqual(create.selected_sheet.get(), SOURCE_SHEET)
         ExcelCopyApp._set_source_sheets(app, [])
-        self.assertEqual(app.selected_source_sheet.get(), "")
-        app.source_sheet_combo.configure.assert_called_with(
-            values=[], state="disabled",
+        self.assertEqual(review.selected_sheet.get(), "")
+        self.assertEqual(create.selected_sheet.get(), "")
+        for panel in (review, create):
+            panel.sheet_combo.configure.assert_called_with(
+                values=[], state="disabled",
+            )
+
+    def test_copy_uses_creation_tab_not_review_tab(self):
+        review, create = self.make_panel(), self.make_panel()
+        source = SourceField(8, "Дані", 77, sheet="Склад")
+        review.selected_source = Mock(return_value=SourceField(1, "Непотрібне", 1))
+        create.selected_source = Mock(return_value=source)
+        session = Mock()
+        session.copy_manually.return_value = None
+        app = SimpleNamespace(
+            session=session, create_sources=create, review_sources=review,
+            destination_tree=Mock(selection=Mock(return_value=("3",))),
+            _refresh_tables=Mock(),
         )
+        ExcelCopyApp.copy_selected(app)
+        session.copy_manually.assert_called_once_with(8, 3, sheet="Склад")
+        review.selected_source.assert_not_called()
+
+
+class AliasReviewTests(unittest.TestCase):
+    """Exercise review actions with a real alias store but no Tk display."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name) / "aliases.json"
+        self.aliases = AliasStore(self.path)
+        self.destination = DestinationField(3, "Техніка")
+        self.source = SourceField(7, "Бронетехніка", 45, sheet="Склад")
+        self.template = AliasStore.template_id([self.destination])
+        self.aliases.set(self.template, self.source, self.destination)
+        from excel_copy_script.models import CopyRecord, ImportResult
+
+        self.record = CopyRecord(self.source, self.destination, "Аліас")
+        session = SimpleNamespace(
+            template_id=self.template,
+            fields=[self.destination],
+            current=ImportResult(filename="report.xlsx", row=4, copied=[self.record]),
+        )
+        self.app = SimpleNamespace(
+            session=session, aliases=self.aliases,
+            copied_tree=SheetSelectorTests.FakeTree(),
+            delete_alias_button=Mock(),
+        )
+        self.app._record_has_alias = lambda record: ExcelCopyApp._record_has_alias(self.app, record)
+        self.app._selected_copy_record = lambda: ExcelCopyApp._selected_copy_record(self.app)
+        self.app._on_copied_selection = lambda: ExcelCopyApp._on_copied_selection(self.app)
+        self.app._refresh_copied = lambda: ExcelCopyApp._refresh_copied(self.app)
+
+    def test_delete_record_alias_preserves_import_record_and_data(self):
+        from unittest.mock import patch
+
+        ExcelCopyApp._refresh_copied(self.app)
+        self.app.copied_tree.selected = ("0",)
+        ExcelCopyApp._on_copied_selection(self.app)
+        self.app.delete_alias_button.configure.assert_called_with(state="normal")
+        with patch("excel_copy_script.gui.messagebox.askyesno", return_value=True) as confirm:
+            ExcelCopyApp.delete_selected_alias(self.app)
+        self.assertTrue(confirm.called)
+        self.assertIsNone(self.aliases.get(self.template, self.source.name, self.source.sheet))
+        self.assertIsNone(AliasStore(self.path).get(self.template, self.source.name, self.source.sheet))
+        self.assertEqual(self.app.session.current.copied, [self.record])
+        self.assertEqual(self.app.copied_tree.rows["0"][-1], "Аліас видалено")
+        self.app.delete_alias_button.configure.assert_called_with(state="disabled")
+
+    def test_cancel_delete_preserves_alias(self):
+        from unittest.mock import patch
+
+        self.app.copied_tree.rows["0"] = ("from", "to", 45, "Аліас")
+        self.app.copied_tree.selected = ("0",)
+        with patch("excel_copy_script.gui.messagebox.askyesno", return_value=False):
+            ExcelCopyApp.delete_selected_alias(self.app)
+        self.assertIsNotNone(self.aliases.get(self.template, self.source.name, self.source.sheet))
+        self.assertEqual(self.app.session.current.copied, [self.record])
+
+    def test_auto_exact_match_without_alias_cannot_be_deleted(self):
+        from excel_copy_script.models import CopyRecord
+
+        exact = CopyRecord(SourceField(1, "Техніка", 42), self.destination, "Збіг назви")
+        self.app.session.current.copied = [exact]
+        ExcelCopyApp._refresh_copied(self.app)
+        self.app.copied_tree.selected = ("0",)
+        ExcelCopyApp._on_copied_selection(self.app)
+        self.app.delete_alias_button.configure.assert_called_with(state="disabled")
 
 
 class AliasMigrationTests(unittest.TestCase):
