@@ -79,7 +79,7 @@ class FullRestartTests(unittest.TestCase):
             self.session.fields[2],
         )
         original = self.session
-        rebuilt = original.restart_with_inputs([self.source_a, self.source_b])
+        rebuilt = original.restart_with_inputs([self.source_a, self.source_b], clear_existing=True)
         self.assertIsNot(rebuilt, original)
         self.assertIsNot(rebuilt.aliases, self.aliases)
         self.assertEqual(rebuilt.path, self.destination)
@@ -98,14 +98,14 @@ class FullRestartTests(unittest.TestCase):
         self.make_source(self.source_a, "ВИСНОВКИ", [
             (1, "Чисельність", 77), (2, "Запас", 100),
         ])
-        rebuilt = self.session.restart_with_inputs([self.source_a])
+        rebuilt = self.session.restart_with_inputs([self.source_a], clear_existing=True)
         self.assertEqual(self.values()["B4"], 77)
         self.assertEqual(rebuilt.current.row, 4)
         self.assert_no_stage_files()
 
     def test_restart_without_inputs_only_clears_previous_rows(self):
         self.session.open_input(self.source_a)
-        result = self.session.restart_with_inputs([])
+        result = self.session.restart_with_inputs([], clear_existing=True)
         self.assertIsNone(result.current)
         self.assertIsNone(self.values()["B4"])
         self.assertEqual(self.values()["A4"], 1)
@@ -113,7 +113,7 @@ class FullRestartTests(unittest.TestCase):
         self.assert_no_stage_files()
 
     def test_repeated_source_file_path_is_replayed_twice(self):
-        rebuilt = self.session.restart_with_inputs([self.source_a, self.source_a])
+        rebuilt = self.session.restart_with_inputs([self.source_a, self.source_a], clear_existing=True)
         self.assertEqual(self.values()["B4"], 11)
         self.assertEqual(self.values()["B5"], 11)
         self.assertEqual(rebuilt.current.row, 5)
@@ -125,7 +125,7 @@ class FullRestartTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing.xlsx"):
             self.session.restart_with_inputs([
                 self.source_a, self.folder / "missing.xlsx",
-            ])
+            ], clear_existing=True)
         self.assertEqual(self.destination.read_bytes(), before)
         self.assertIs(self.session.current, original_current)
         self.assert_no_stage_files()
@@ -136,7 +136,7 @@ class FullRestartTests(unittest.TestCase):
         corrupt = self.folder / "bad.xlsx"
         corrupt.write_text("not an Excel workbook", encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "bad.xlsx"):
-            self.session.restart_with_inputs([self.source_a, corrupt])
+            self.session.restart_with_inputs([self.source_a, corrupt], clear_existing=True)
         self.assertEqual(self.destination.read_bytes(), original)
         self.assert_no_stage_files()
 

@@ -101,7 +101,7 @@ class RecentDirectoriesTests(unittest.TestCase):
             path=destination_path, fields=[object()],
             next_empty_row=lambda: 4,
             clear_previous_imports=Mock(return_value=0),
-            open_input=lambda _: SimpleNamespace(row=4, sheets=["ВИСНОВКИ"]),
+            open_input=lambda _, **kwargs: SimpleNamespace(row=4, sheets=["ВИСНОВКИ"]),
         )
         app = SimpleNamespace(
             recent_directories=self.store,
@@ -111,6 +111,8 @@ class RecentDirectoriesTests(unittest.TestCase):
             source_var=Mock(),
             status_var=Mock(),
             source_button=Mock(),
+            clear_rows_var=Mock(get=Mock(return_value=False)),
+            _choose_destination_row=Mock(),
             restart_button=Mock(),
             alias_button=Mock(),
             opened_sources=[],

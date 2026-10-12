@@ -123,6 +123,7 @@ class DestinationResetTests(unittest.TestCase):
             destination_var=Mock(),
             source_var=Mock(),
             source_button=Mock(),
+            clear_rows_var=Mock(get=Mock(return_value=True)),
             restart_button=Mock(),
             alias_button=Mock(),
             opened_sources=[Path("/before/old.xlsx")],
@@ -154,6 +155,7 @@ class DestinationResetTests(unittest.TestCase):
                 initial_directory=Mock(return_value=self.directory),
             ),
             session=old_session,
+            clear_rows_var=Mock(get=Mock(return_value=True)),
             _remember_directory=Mock(),
         )
         with (

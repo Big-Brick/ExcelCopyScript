@@ -52,6 +52,8 @@ class FullRestartGuiTests(unittest.TestCase):
         wb.save(path)
 
     def load_files(self):
+        # The earlier restart tests explicitly exercise the legacy clear mode.
+        self.app.clear_rows_var.set(True)
         with (
             patch("excel_copy_script.gui.AliasStore", return_value=self.aliases),
             patch("excel_copy_script.gui.filedialog.askopenfilename",

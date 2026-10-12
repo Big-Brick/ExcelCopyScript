@@ -7,15 +7,25 @@ import shutil
 import tempfile
 from collections import defaultdict
 from pathlib import Path
-from typing import Sequence
+from collections.abc import Callable, Sequence
 
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
 from .aliases import AliasStore
 from .config import DESTINATION_SHEET, FIRST_DATA_ROW, FIRST_DESTINATION_COLUMN, HEADER_ROW, SOURCE_SHEET
-from .models import AliasEntry, CopyRecord, DestinationField, ImportResult, SourceField
+from .models import (
+    AliasEntry, CopyRecord, DestinationField, ImportResult, RowMatch,
+    RowSelectionRequest, SourceField,
+)
 from .utils import nonempty, text_as_excel_value
+
+class RowSelectionCancelled(Exception):
+    """User cancelled the row-choice dialog; no workbook changes were made."""
+
+
+RowSelector = Callable[[RowSelectionRequest], int | None]
+
 
 class WorkbookSession:
     def __init__(self, path: Path, aliases: AliasStore):
@@ -47,7 +57,10 @@ class WorkbookSession:
             )
         self.current: ImportResult | None = None
 
-    def restart_with_inputs(self, inputs: Sequence[Path]) -> "WorkbookSession":
+    def restart_with_inputs(
+        self, inputs: Sequence[Path], *, clear_existing: bool = False,
+        row_selector: RowSelector | None = None,
+    ) -> "WorkbookSession":
         """Rebuild the whole import from disk with current persisted aliases.
 
         Work on a disposable workbook in the destination's directory, then
@@ -65,11 +78,17 @@ class WorkbookSession:
             shutil.copy2(self.path, staged_path)
             fresh_aliases = AliasStore(self.aliases.path)
             fresh = WorkbookSession(staged_path, fresh_aliases)
-            fresh.clear_previous_imports()
+            if clear_existing:
+                fresh.clear_previous_imports()
             for index, filename in enumerate(inputs, start=1):
                 filename = Path(filename)
                 try:
-                    fresh.open_input(filename)
+                    fresh.open_input(
+                        filename, row_selector=row_selector,
+                        match_existing=not clear_existing,
+                    )
+                except RowSelectionCancelled:
+                    raise
                 except Exception as exc:
                     raise ValueError(
                         f"Вхідний файл {index}/{len(inputs)} "
@@ -214,20 +233,83 @@ class WorkbookSession:
             )
         return targets
 
-    def _write(self, row: int, records: list[CopyRecord]) -> None:
+    def _match_existing_rows(self, records: list[CopyRecord]) -> tuple[RowMatch, ...]:
+        """Compare actual imported values, not names or unrelated columns."""
+        if not records:
+            return ()
+        candidates = []
+        for row in range(FIRST_DATA_ROW, self.sheet.max_row + 1):
+            if not any(nonempty(self.sheet.cell(row, col).value)
+                       for col in range(FIRST_DESTINATION_COLUMN, self.sheet.max_column + 1)):
+                continue
+            matching, differing = [], []
+            for record in records:
+                column = record.destination.column
+                letter = get_column_letter(column)
+                actual = self.sheet.cell(row, column).value
+                expected = text_as_excel_value(record.source.value)
+                # bool is an int in Python, but Excel boolean and numeric
+                # cells are different values for the purposes of matching.
+                equal = actual == expected and (
+                    not isinstance(actual, bool) and not isinstance(expected, bool)
+                    or type(actual) is type(expected)
+                )
+                if equal:
+                    matching.append(letter)
+                else:
+                    differing.append(
+                        f"{letter}: {actual if actual is not None else '∅'} → {expected}"
+                    )
+            if matching:
+                candidates.append(RowMatch(
+                    row, tuple(matching), tuple(differing), len(records),
+                ))
+        return tuple(candidates)
+
+    def _select_output_row(
+        self, records: list[CopyRecord], filename: str,
+        row_selector: RowSelector | None,
+    ) -> tuple[int, bool]:
+        """Find a unique full match, or ask before resolving ambiguity."""
+        candidates = self._match_existing_rows(records)
+        full = [candidate for candidate in candidates if candidate.complete]
+        if len(full) == 1:
+            return full[0].row, True
+        if len(full) > 1 or candidates:
+            if row_selector is None:
+                raise ValueError(
+                    "Знайдено декілька або часткові збіги з існуючими рядками. "
+                    "Потрібно вибрати рядок для перезапису або новий рядок."
+                )
+            choice = row_selector(RowSelectionRequest(filename, candidates))
+            if choice is not None:
+                if type(choice) is not int or choice not in {r.row for r in candidates}:
+                    raise ValueError("Вибрано недопустимий рядок для перезапису")
+                return choice, True
+        return self.next_empty_row(), False
+
+    def _write(
+        self, row: int, records: list[CopyRecord], *, allow_overwrite: bool = False,
+    ) -> None:
         if not records:
             return
-        before = {}
+        # Validate all cells before changing even the first one.
         for record in records:
             column = record.destination.column
             if column < FIRST_DESTINATION_COLUMN:
                 raise ValueError("Стовпчик A містить порядкові номери і не призначений для імпорту")
             cell = self.sheet.cell(row, column)
-            if nonempty(cell.value):
+            if nonempty(cell.value) and not allow_overwrite:
                 raise ValueError(f"Комірка {cell.coordinate} вже заповнена")
-            before[column] = cell.value
-            cell.value = text_as_excel_value(record.source.value)
+        before = {
+            record.destination.column: self.sheet.cell(row, record.destination.column).value
+            for record in records
+        }
         try:
+            for record in records:
+                self.sheet.cell(row, record.destination.column).value = (
+                    text_as_excel_value(record.source.value)
+                )
             self._save()
         except Exception:
             for column, old_value in before.items():
@@ -249,9 +331,11 @@ class WorkbookSession:
             if tmp_path is not None:
                 tmp_path.unlink(missing_ok=True)
 
-    def open_input(self, path: Path) -> ImportResult:
+    def open_input(
+        self, path: Path, *, row_selector: RowSelector | None = None,
+        match_existing: bool = True,
+    ) -> ImportResult:
         source_fields, warnings, sheet_names = self._read_source(Path(path))
-        target_row = self.next_empty_row()
         eligible_sources = [field for field in source_fields if field.eligible]
         # Only saved mappings are eligible. A row-scoped alias overrides the
         # general alias for exactly its row (while still checking its name).
@@ -322,12 +406,16 @@ class WorkbookSession:
                 alias_issues[record.source.location] = reason
 
         safe_matches.sort(key=lambda rec: rec.destination.column)
-        self._write(target_row, safe_matches)
+        target_row, overwrite = (
+            self._select_output_row(safe_matches, Path(path).name, row_selector)
+            if match_existing else (self.next_empty_row(), False)
+        )
+        self._write(target_row, safe_matches, allow_overwrite=overwrite)
         result = ImportResult(
             filename=Path(path).name, row=target_row,
             copied=safe_matches, warnings=warnings,
             sheets=sheet_names, all_sources=source_fields,
-            alias_issues=alias_issues,
+            alias_issues=alias_issues, overwrite_existing=overwrite,
         )
         if had_duplicates:
             result.warnings.append(
@@ -373,7 +461,7 @@ class WorkbookSession:
             source.using_column(source_column), destination, "Вручну",
             alias_row=alias_row,
         )
-        self._write(result.row, [record])
+        self._write(result.row, [record], allow_overwrite=result.overwrite_existing)
         result.copied.append(record)
         result.unmatched_sources.remove(source)
         result.unmatched_destinations.remove(destination)

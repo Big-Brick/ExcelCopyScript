@@ -91,3 +91,26 @@ class ImportResult:
     sheets: list[str] = field(default_factory=list)
     all_sources: list[SourceField] = field(default_factory=list)
     alias_issues: dict[tuple[str, int], str] = field(default_factory=dict)
+    overwrite_existing: bool = False
+
+
+@dataclass(frozen=True)
+class RowMatch:
+    """An existing destination row sharing one or more imported values."""
+
+    row: int
+    matching: tuple[str, ...]
+    differing: tuple[str, ...]
+    total: int
+
+    @property
+    def complete(self) -> bool:
+        return len(self.matching) == self.total
+
+
+@dataclass(frozen=True)
+class RowSelectionRequest:
+    """Ambiguous destination-row matches requiring an explicit user choice."""
+
+    filename: str
+    candidates: tuple[RowMatch, ...]

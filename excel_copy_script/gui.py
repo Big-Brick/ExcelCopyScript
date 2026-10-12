@@ -14,9 +14,10 @@ from .config import FILE_TYPES
 from .gui_layout import LayoutPersistence
 from .models import AliasEntry, CopyRecord, SourceField
 from .recent_directories import RecentDirectories
+from .row_selection_dialog import RowSelectionDialog
 from .source_rows_panel import SourceRowsPanel
 from .utils import nonempty, present
-from .workbook import WorkbookSession
+from .workbook import RowSelectionCancelled, WorkbookSession
 
 
 class ExcelCopyApp(tk.Tk):
@@ -35,6 +36,7 @@ class ExcelCopyApp(tk.Tk):
         self.destination_var = tk.StringVar(value="Підсумковий файл не вибрано")
         self.source_var = tk.StringVar(value="Вхідний файл не вибрано")
         self.status_var = tk.StringVar(value="Виберіть підсумковий файл, потім вхідний.")
+        self.clear_rows_var = tk.BooleanVar(value=False)
         self._layout_error_reported = False
         self._build_ui()
         self.layout = LayoutPersistence(on_error=self._on_layout_error)
@@ -58,6 +60,9 @@ class ExcelCopyApp(tk.Tk):
             state="disabled",
         )
         self.restart_button.pack(side="left", padx=(12, 0))
+        ttk.Checkbutton(
+            top, text="Очищати робочу область", variable=self.clear_rows_var,
+        ).pack(side="left", padx=(12, 0))
         ttk.Label(self, textvariable=self.destination_var, padding=(12, 0)).pack(anchor="w")
         ttk.Label(self, textvariable=self.source_var, padding=(12, 2)).pack(anchor="w")
 
@@ -369,7 +374,8 @@ class ExcelCopyApp(tk.Tk):
         try:
             aliases = AliasStore()
             session = WorkbookSession(Path(chosen), aliases)
-            session.clear_previous_imports()
+            if self.clear_rows_var.get():
+                session.clear_previous_imports()
         except Exception as exc:
             messagebox.showerror("Помилка відкриття", str(exc))
             return
@@ -386,7 +392,9 @@ class ExcelCopyApp(tk.Tk):
         self._refresh_destination_rows()
         self.status_var.set(
             f"Знайдено {len(session.fields)} стовпчиків. "
-            f"Наступний рядок: {session.next_empty_row()}."
+            f"Наступний вільний рядок: {session.next_empty_row()}. "
+            + ("Робочу область очищено." if self.clear_rows_var.get()
+               else "Попередні дані збережено.")
         )
 
     def open_alias_manager(self) -> None:
@@ -412,7 +420,13 @@ class ExcelCopyApp(tk.Tk):
         if not chosen:
             return
         try:
-            result = self.session.open_input(Path(chosen))
+            result = self.session.open_input(
+                Path(chosen),
+                match_existing=not self.clear_rows_var.get(),
+                row_selector=self._choose_destination_row,
+            )
+        except RowSelectionCancelled:
+            return
         except Exception as exc:
             messagebox.showerror("Помилка імпорту", str(exc))
             return
@@ -422,12 +436,21 @@ class ExcelCopyApp(tk.Tk):
         self._set_source_sheets(result.sheets)
         self._refresh_tables()
 
+    def _choose_destination_row(self, request) -> int | None:
+        return RowSelectionDialog.choose(self, request)
+
     def restart_session(self) -> None:
         """Replay all selected source files with current aliases, no dialogs."""
         if self.session is None:
             return
         try:
-            fresh = self.session.restart_with_inputs(self.opened_sources)
+            fresh = self.session.restart_with_inputs(
+                self.opened_sources,
+                clear_existing=self.clear_rows_var.get(),
+                row_selector=self._choose_destination_row,
+            )
+        except RowSelectionCancelled:
+            return
         except Exception as exc:
             messagebox.showerror(
                 "Помилка повного перезапуску",
@@ -548,7 +571,9 @@ class ExcelCopyApp(tk.Tk):
         self._refresh_source_panels()
         self._on_selection()
         status = (
-            f"{result.filename} → рядок {result.row}. Скопійовано: {len(result.copied)}; "
+            f"{result.filename} → рядок {result.row}"
+            f"{' (перезапис)' if result.overwrite_existing else ' (новий)'}. "
+            f"Скопійовано: {len(result.copied)}; "
             f"не зіставлено вихідних стовпчиків: {len(result.unmatched_destinations)}; "
             f"вхідних рядків: {len(result.unmatched_sources)}; "
             f"пропущено аліасів: {len(result.alias_issues)}. Зміни автоматично збережено."
