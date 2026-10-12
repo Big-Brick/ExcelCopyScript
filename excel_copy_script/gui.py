@@ -38,12 +38,25 @@ class ExcelCopyApp(tk.Tk):
             self.profile = self.profile_manager.load_last()
         except (OSError, ValueError) as exc:
             self.profile_error = str(exc)
-            self.profile = Profile(
-                self.profile_manager.default_path,
-                build_profile_from_legacy(
-                    self.profile_manager.config_dir / "_missing_aliases_.json"
-                ),
-            )
+            # Never overwrite a broken/unsupported profile as a "recovery".
+            # Prefer an intact default profile, otherwise use a new path.
+            try:
+                self.profile = Profile.load(self.profile_manager.default_path)
+            except (OSError, ValueError):
+                from uuid import uuid4
+                recovery = (
+                    self.profile_manager.config_dir / "profiles"
+                    / f"recovery-{uuid4().hex}.json"
+                )
+                try:
+                    recovered = build_profile_from_legacy(
+                        self.profile_manager.legacy_path
+                    )
+                except ValueError:
+                    recovered = build_profile_from_legacy(
+                        self.profile_manager.config_dir / "_missing_aliases_.json"
+                    )
+                self.profile = Profile(recovery, recovered)
         self.aliases: AliasStore | None = AliasStore.from_profile(self.profile)
         self.opened_sources: list[Path] = []
         self.recent_directories = RecentDirectories()
