@@ -86,7 +86,8 @@ class MultiSheetTests(unittest.TestCase):
         later = reopened.open_input(input_file)
         self.assertEqual([(rec.method, rec.source.sheet) for rec in later.copied],
                          [("Аліас", "Склад")])
-        self.assertEqual(reopened.sheet["C5"].value, 27)
+        self.assertEqual(reopened.sheet["C4"].value, 27)
+        self.assertEqual(later.row, 4)
 
     def test_same_parameter_on_different_sheets_is_independent(self):
         first = self.make_input("first.xlsx", {

@@ -128,7 +128,7 @@ class RecentDirectoriesTests(unittest.TestCase):
             patch("excel_copy_script.gui.AliasStore"),
         ):
             ExcelCopyApp.open_destination(app)
-            session.clear_previous_imports.assert_called_once_with()
+            session.clear_previous_imports.assert_not_called()
             self.assertEqual(Path(open_dialog.call_args.kwargs["initialdir"]), Path.home())
 
         with patch("excel_copy_script.gui.filedialog.askopenfilename", return_value=str(source_path)) as open_dialog:

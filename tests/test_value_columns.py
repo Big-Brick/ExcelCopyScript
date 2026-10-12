@@ -136,7 +136,7 @@ class SourceColumnTests(unittest.TestCase):
         wb2["Склад"]["G2"] = 77
         second = self.folder / "second.xlsx"
         wb2.save(second)
-        result = self.session.open_input(second)
+        result = self.session.open_input(second, row_selector=lambda request: None)
         self.assertEqual({r.method for r in result.copied}, {"Аліас"})
         self.assertEqual(self.session.sheet["C5"].value, 77)
 
