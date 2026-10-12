@@ -19,7 +19,8 @@ class SourceRowsPanel(ttk.Frame):
     COLUMNS = tuple(range(3, 8))
 
     def __init__(
-        self, parent: tk.Misc, on_selection_changed: Callable[[], None] | None = None
+        self, parent: tk.Misc, on_selection_changed: Callable[[], None] | None = None,
+        *, compact_header: bool = False,
     ) -> None:
         super().__init__(parent, padding=4)
         self._rows: list[SourceField] = []
@@ -30,16 +31,30 @@ class SourceRowsPanel(ttk.Frame):
         self._on_selection_changed = on_selection_changed
         self._syncing_selection = False
         self._syncing_scroll = False
+        self._compact_header = compact_header
         self.selected_sheet = tk.StringVar(value="")
         self.selected_value_column = tk.StringVar(value="C")
 
-        ttk.Label(self, text="Вхідні рядки (усі)",
-                  font=("", 10, "bold")).pack(anchor="w", pady=(0, 5))
-        selector = ttk.Frame(self)
-        selector.pack(fill="x", pady=(0, 6))
+        # In the creation tab the title and controls share a single strip,
+        # freeing an entire line of height for the incoming rows Treeviews.
+        if compact_header:
+            selector = ttk.Frame(self)
+            selector.pack(fill="x", pady=(0, 5))
+            ttk.Label(
+                selector, text="Вхідні рядки",
+                font=("", 10, "bold"),
+            ).pack(side="left", padx=(0, 10))
+        else:
+            ttk.Label(
+                self, text="Вхідні рядки (усі)",
+                font=("", 10, "bold"),
+            ).pack(anchor="w", pady=(0, 5))
+            selector = ttk.Frame(self)
+            selector.pack(fill="x", pady=(0, 6))
         ttk.Label(selector, text="Аркуш:").pack(side="left")
         self.sheet_combo = ttk.Combobox(
-            selector, textvariable=self.selected_sheet, state="disabled", width=20,
+            selector, textvariable=self.selected_sheet, state="disabled",
+            width=10 if compact_header else 20,
         )
         self.sheet_combo.pack(side="left", fill="x", expand=True, padx=(6, 8))
         self.sheet_combo.bind("<<ComboboxSelected>>", self._on_sheet_changed)
@@ -115,10 +130,14 @@ class SourceRowsPanel(ttk.Frame):
             table.tag_configure("aliased", background="#ddf2df")
             table.tag_configure("skipped", background="#fff0c2")
         self.issue_var = tk.StringVar(value="")
-        ttk.Label(
+        self.issue_label = ttk.Label(
             self, textvariable=self.issue_var,
             foreground="#875800", wraplength=690,
-        ).pack(fill="x", pady=(4, 0))
+        )
+        if not compact_header:
+            self.issue_label.pack(fill="x", pady=(4, 0))
+        # On the creation tab, avoid reserving a permanent empty warning row.
+        # It appears only when the selected source really has a problem.
 
     def _yview(self, *args) -> None:
         self.tree.yview(*args)
@@ -241,5 +260,10 @@ class SourceRowsPanel(ttk.Frame):
         self.issue_var.set(
             f"⚠ {selected.sheet}!B{selected.row}: {issue}" if issue else ""
         )
+        if getattr(self, "_compact_header", False):
+            if issue and not self.issue_label.winfo_manager():
+                self.issue_label.pack(fill="x", pady=(4, 0))
+            elif not issue and self.issue_label.winfo_manager():
+                self.issue_label.pack_forget()
         if self._on_selection_changed is not None:
             self._on_selection_changed()

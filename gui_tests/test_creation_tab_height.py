@@ -26,6 +26,51 @@ class CreationTabHeightTests(unittest.TestCase):
             older_window = self.app.create_sources.values_tree.winfo_height()
             self.assertGreater(enlarged, older_window + 70)
 
+    def test_source_rows_tree_uses_almost_all_destination_tree_height(self):
+        # Previously the sheet/value selectors and an empty warning strip
+        # consumed ~50-65px more than the neighboring destination header.
+        self.app.geometry("1400x850")
+        self.app.notebook.select(1)
+        self.app.update()
+        incoming = self.app.create_sources.values_tree.winfo_height()
+        outgoing = self.app.destination_tree.winfo_height()
+        self.assertGreater(incoming, 300)
+        self.assertGreater(outgoing, 300)
+        self.assertLessEqual(
+            outgoing - incoming, 35,
+            f"Incoming rows are still too short: {incoming=} {outgoing=}",
+        )
+        self.assertTrue(self.app.create_sources.sheet_combo.winfo_ismapped())
+        self.assertTrue(self.app.create_sources.value_combo.winfo_ismapped())
+        self.assertFalse(self.app.create_sources.issue_label.winfo_ismapped())
+
+    def test_warning_takes_height_only_while_row_has_a_problem(self):
+        from excel_copy_script.models import SourceField
+
+        self.app.geometry("1400x850")
+        self.app.notebook.select(1)
+        panel = self.app.create_sources
+        panel.set_sheets(["ВИСНОВКИ"])
+        panel.refresh(
+            [SourceField(5, "Техніка", 19), SourceField(8, "Резерв", 22)],
+            alias_targets={("висновки", 8): "E: Резерв"},
+            alias_issues={("висновки", 8): "Конфлікт двох аліасів"},
+        )
+        self.app.update()
+        full_height = panel.values_tree.winfo_height()
+        self.assertFalse(panel.issue_label.winfo_ismapped())
+
+        panel.tree.selection_set("row-8")
+        self.app.update()
+        self.assertTrue(panel.issue_label.winfo_ismapped())
+        self.assertIn("Конфлікт", panel.issue_var.get())
+        self.assertLess(panel.values_tree.winfo_height(), full_height)
+
+        panel.tree.selection_set("row-5")
+        self.app.update()
+        self.assertFalse(panel.issue_label.winfo_ismapped())
+        self.assertEqual(panel.values_tree.winfo_height(), full_height)
+
     def test_copy_action_and_help_share_same_horizontal_row(self):
         self.app.notebook.select(1)
         self.app.update()

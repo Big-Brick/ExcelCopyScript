@@ -117,6 +117,7 @@ class ExcelCopyApp(tk.Tk):
         self.destination_tree.tag_configure("filled", background="#ddf2df")
         self.create_sources = SourceRowsPanel(
             create_panes, on_selection_changed=self._on_selection,
+            compact_header=True,
         )
         create_panes.add(destination_frame, weight=1)
         create_panes.add(self.create_sources, weight=1)
