@@ -12,6 +12,7 @@ from excel_copy_script.gui import ExcelCopyApp
 from excel_copy_script.models import DestinationField, SourceField
 from excel_copy_script.new_profile_dialog import NewProfileDialog, suggested_profile_path
 from excel_copy_script.profiles import Profile, ProfileManager
+from excel_copy_script.workbook_layout import WorkbookLayout
 
 
 class NewProfileGuiTests(unittest.TestCase):
@@ -99,6 +100,36 @@ class NewProfileGuiTests(unittest.TestCase):
         self.assertFalse(suggested.exists())
         self.assertFalse(self.manager.state_path.exists())
 
+    def test_original_hardcoded_defaults_even_with_different_active_profile(self):
+        # The new-profile dialog must NOT inherit coordinates or sheet names
+        # from whichever profile happens to be active.
+        altered = self.app.profile.copy_as(self.folder / "altered.json")
+        altered.layout = WorkbookLayout(
+            destination_sheet="Another sheet", header_row=9, first_data_row=12,
+            first_destination_column=5, source_name_column=3,
+            first_source_row=4, source_value_first_column=6,
+            source_value_last_column=9, preferred_source_sheet="Different",
+        )
+        altered.save()
+        self.app._activate_profile(altered)
+        dialog = self.dialog()
+        expected = {
+            "destination_sheet": "Дані_підрозділів",
+            "header_row": "3",
+            "first_data_row": "4",
+            "first_destination_column": "2",
+            "source_name_column": "2",
+            "first_source_row": "1",
+            "source_value_first_column": "3",
+            "source_value_last_column": "7",
+            "preferred_source_sheet": "ВИСНОВКИ",
+        }
+        self.assertEqual(
+            {key: value.get() for key, value in dialog.fields.items()},
+            expected,
+        )
+        dialog.destroy()
+
     def test_invalid_settings_report_error_and_keep_dialog_open(self):
         dialog = self.dialog()
         target = self.folder / "invalid-test.json"
@@ -140,7 +171,7 @@ class NewProfileGuiTests(unittest.TestCase):
 
     def test_default_filename_skips_existing_files(self):
         target = self.manager.config_dir / "profiles"
-        target.mkdir(parents=True)
+        target.mkdir(parents=True, exist_ok=True)
         (target / "new-profile.json").write_text("existing")
         (target / "new-profile-2.json").write_text("existing")
         dialog = self.dialog()
