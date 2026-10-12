@@ -11,6 +11,7 @@ from tkinter import filedialog, messagebox, ttk
 from .alias_dialog import AliasManagerDialog
 from .aliases import AliasStore
 from .config import FILE_TYPES
+from .gui_layout import LayoutPersistence
 from .models import AliasEntry, CopyRecord, SourceField
 from .recent_directories import RecentDirectories
 from .source_rows_panel import SourceRowsPanel
@@ -30,7 +31,12 @@ class ExcelCopyApp(tk.Tk):
         self.destination_var = tk.StringVar(value="Підсумковий файл не вибрано")
         self.source_var = tk.StringVar(value="Вхідний файл не вибрано")
         self.status_var = tk.StringVar(value="Виберіть підсумковий файл, потім вхідний.")
+        self._layout_error_reported = False
         self._build_ui()
+        self.layout = LayoutPersistence(on_error=self._on_layout_error)
+        self._configure_layout_persistence()
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_notebook_tab_changed)
+        self.after_idle(self._restore_active_tab_layout)
 
     def _build_ui(self) -> None:
         top = ttk.Frame(self, padding=12)
@@ -55,6 +61,7 @@ class ExcelCopyApp(tk.Tk):
 
         # Review: copied rows + unmatched source rows (independent sheet selector).
         review_panes = ttk.Panedwindow(review_tab, orient="horizontal")
+        self.review_panes = review_panes
         review_panes.pack(fill="both", expand=True)
         copied_frame, self.copied_tree = self._make_table(
             review_panes, "Скопійовані значення",
@@ -87,6 +94,7 @@ class ExcelCopyApp(tk.Tk):
         # Creation: all destination fields + all source rows; completed
         # destinations are visible for context but cannot be selected for copying.
         create_panes = ttk.Panedwindow(create_tab, orient="horizontal")
+        self.create_panes = create_panes
         create_panes.pack(fill="both", expand=True)
         destination_frame, self.destination_tree = self._make_table(
             create_panes, "Вихідні стовпчики",
@@ -120,6 +128,43 @@ class ExcelCopyApp(tk.Tk):
         status.pack(fill="x")
         ttk.Separator(status).pack(fill="x", pady=(0, 8))
         ttk.Label(status, textvariable=self.status_var, wraplength=1150).pack(anchor="w")
+
+    def _on_layout_error(self, error: OSError) -> None:
+        if self._layout_error_reported:
+            return
+        self._layout_error_reported = True
+        messagebox.showwarning(
+            "Налаштування інтерфейсу",
+            f"Не вдалося зберегти ширини колонок і розділювачі:\n{error}",
+            parent=self,
+        )
+
+    def _configure_layout_persistence(self) -> None:
+        trees = {
+            "review_copied": self.copied_tree,
+            "review_source_headers": self.review_sources.tree,
+            "review_source_values": self.review_sources.values_tree,
+            "create_destination": self.destination_tree,
+            "create_source_headers": self.create_sources.tree,
+            "create_source_values": self.create_sources.values_tree,
+        }
+        for key, tree in trees.items():
+            self.layout.register_columns(key, tree)
+        for tab, key, splitter in (
+            ("review", "review_outer", self.review_panes),
+            ("review", "review_inner", self.review_sources.divider),
+            ("create", "create_outer", self.create_panes),
+            ("create", "create_inner", self.create_sources.divider),
+        ):
+            self.layout.register_sash(tab, key, splitter)
+
+    def _restore_active_tab_layout(self, _event=None) -> None:
+        tab = "review" if self.notebook.index("current") == 0 else "create"
+        self.layout.restore_tab(tab)
+
+    def _on_notebook_tab_changed(self, _event=None) -> None:
+        # The page must be mapped before positioning ttk.Panedwindow sashes.
+        self.after_idle(self._restore_active_tab_layout)
 
     @staticmethod
     def _make_table(parent, title, headings, widths):
