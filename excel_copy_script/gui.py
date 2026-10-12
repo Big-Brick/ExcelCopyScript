@@ -11,7 +11,7 @@ from tkinter import filedialog, messagebox, ttk
 from .alias_dialog import AliasManagerDialog
 from .aliases import AliasStore
 from .config import FILE_TYPES
-from .models import CopyRecord
+from .models import AliasEntry, CopyRecord, SourceField
 from .recent_directories import RecentDirectories
 from .source_rows_panel import SourceRowsPanel
 from .utils import nonempty, present
@@ -99,6 +99,9 @@ class ExcelCopyApp(tk.Tk):
         create_panes.add(destination_frame, weight=1)
         create_panes.add(self.create_sources, weight=1)
         self.destination_tree.bind("<<TreeviewSelect>>", self._on_selection)
+        self.destination_tree.bind("<Button-3>", self._show_destination_alias_menu)
+        for tree in (self.create_sources.tree, self.create_sources.values_tree):
+            tree.bind("<Button-3>", self._show_source_alias_menu)
 
         create_actions = ttk.Frame(create_tab, padding=(4, 8, 4, 6))
         create_actions.pack(fill="x")
@@ -177,28 +180,101 @@ class ExcelCopyApp(tk.Tk):
         enabled = record is not None and self._record_has_alias(record)
         self.delete_alias_button.configure(state="normal" if enabled else "disabled")
 
-    def delete_selected_alias(self) -> None:
-        """Remove mapping for future imports; never modify the existing workbook."""
-        record = self._selected_copy_record()
-        if record is None or not self._record_has_alias(record):
+    def _alias_for_source(self, source: SourceField) -> AliasEntry | None:
+        if self.aliases is None or self.session is None:
+            return None
+        return next((
+            entry for entry in self.aliases.list_for_template(self.session.template_id)
+            if entry.source_key == source.key
+            and entry.sheet.casefold() == source.sheet.casefold()
+        ), None)
+
+    def _delete_alias_entry(self, entry: AliasEntry) -> None:
+        """Delete one saved mapping without altering values already copied."""
+        if self.aliases is None or self.session is None:
             return
         if not messagebox.askyesno(
             "Підтвердження видалення",
-            f"Видалити аліас «{record.source.sheet}!{record.source.name}» → "
-            f"«{record.destination.name}»?\n\n"
-            "Уже скопійоване значення залишиться у підсумковому файлі.",
+            f"Видалити аліас «{entry.sheet}!{entry.source_name}» "
+            f"[{get_column_letter(entry.source_column)}] → "
+            f"«{entry.destination_key}»?\n\n"
+            "Уже скопійовані значення Excel не зміняться.",
             parent=self,
         ):
             return
         try:
-            self.aliases.delete(
-                self.session.template_id, record.source.name, sheet=record.source.sheet,
+            deleted = self.aliases.delete(
+                self.session.template_id, entry.source_key, sheet=entry.sheet,
             )
         except (OSError, ValueError) as exc:
             messagebox.showerror("Помилка видалення аліаса", str(exc), parent=self)
             return
-        self._refresh_copied()
-        self._refresh_source_panels()
+        if deleted:
+            self._refresh_copied()
+            self._refresh_source_panels()
+
+    def _popup_alias_menu(self, entries: list[AliasEntry], event) -> None:
+        if not entries:
+            return
+        # Retain a live Tk menu after tk_popup() returns (selection is async).
+        previous = getattr(self, "_alias_context_menu", None)
+        if previous is not None:
+            previous.destroy()
+        menu = tk.Menu(self, tearoff=False)
+        self._alias_context_menu = menu
+        if len(entries) == 1:
+            entry = entries[0]
+            menu.add_command(
+                label="Видалити аліас",
+                command=lambda entry=entry: self._delete_alias_entry(entry),
+            )
+        else:
+            submenu = tk.Menu(menu, tearoff=False)
+            for entry in entries:
+                menu_label = (
+                    f"{entry.sheet}!{entry.source_name} "
+                    f"[{get_column_letter(entry.source_column)}]"
+                )
+                submenu.add_command(
+                    label=menu_label,
+                    command=lambda entry=entry: self._delete_alias_entry(entry),
+                )
+            menu.add_cascade(label="Видалити аліас", menu=submenu)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _show_source_alias_menu(self, event):
+        if self.aliases is None or self.session is None:
+            return
+        source = self.create_sources.source_at(event.widget, event.y)
+        if source is None:
+            return
+        entry = self._alias_for_source(source)
+        if entry is not None:
+            self._popup_alias_menu([entry], event)
+            return "break"
+
+    def _show_destination_alias_menu(self, event):
+        if self.session is None:
+            return
+        row_id = self.destination_tree.identify_row(event.y)
+        if not row_id:
+            return
+        entries = self.session.aliases_for_destination(int(row_id))
+        if entries:
+            self._popup_alias_menu(entries, event)
+            return "break"
+
+    def delete_selected_alias(self) -> None:
+        """Legacy review-tab action, sharing the same confirmation and refresh."""
+        record = self._selected_copy_record()
+        if record is None or not self._record_has_alias(record):
+            return
+        entry = self._alias_for_source(record.source)
+        if entry is not None:
+            self._delete_alias_entry(entry)
 
     def _remember_directory(self, kind: str, filename: str) -> None:
         """Do not fail a successful file open because UI preferences cannot be saved."""

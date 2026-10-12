@@ -204,6 +204,12 @@ class SourceRowsPanel(ttk.Frame):
         items = self.tree.selection() or self.values_tree.selection()
         return self._sources_by_item_id.get(items[0]) if items else None
 
+    def source_at(self, tree: ttk.Treeview, y: int) -> SourceField | None:
+        """Find the row under a mouse click, not the previously selected row."""
+        if tree not in (self.tree, self.values_tree):
+            return None
+        return self._sources_by_item_id.get(tree.identify_row(y))
+
     def _on_sheet_changed(self, _event=None) -> None:
         self.refresh()
 

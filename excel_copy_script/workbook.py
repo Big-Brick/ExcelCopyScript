@@ -12,7 +12,7 @@ from openpyxl.utils import get_column_letter
 
 from .aliases import AliasStore
 from .config import DESTINATION_SHEET, FIRST_DATA_ROW, FIRST_DESTINATION_COLUMN, HEADER_ROW, SOURCE_SHEET
-from .models import CopyRecord, DestinationField, ImportResult, SourceField
+from .models import AliasEntry, CopyRecord, DestinationField, ImportResult, SourceField
 from .utils import nonempty, text_as_excel_value
 
 class WorkbookSession:
@@ -126,19 +126,38 @@ class WorkbookSession:
             if formulas is not None:
                 formulas.close()
 
+    def _resolve_alias_destination(
+        self, header: str | None, column: int | None
+    ) -> DestinationField | None:
+        """Resolve a saved target exactly as automatic importing does."""
+        candidates = [field for field in self.fields if field.key == header]
+        if len(candidates) == 1:
+            return candidates[0]
+        if len(candidates) > 1:
+            return next((field for field in candidates if field.column == column), None)
+        return None
+
     def _alias_target_for(self, source: SourceField) -> tuple[DestinationField | None, int]:
         """Resolve only an explicitly saved alias, never an incidental name match."""
         alias = self.aliases.get(self.template_id, source.name, source.sheet)
         if alias is None:
             return None, 3
-        candidates = [field for field in self.fields if field.key == alias.get("header")]
-        if len(candidates) == 1:
-            return candidates[0], alias.get("source_column", 3)
-        if len(candidates) > 1:
-            pinned = [field for field in candidates if field.column == alias.get("column")]
-            if len(pinned) == 1:
-                return pinned[0], alias.get("source_column", 3)
-        return None, 3
+        return (
+            self._resolve_alias_destination(alias.get("header"), alias.get("column")),
+            alias.get("source_column", 3),
+        )
+
+    def aliases_for_destination(self, column: int) -> list[AliasEntry]:
+        """All persisted mappings to this output column, even if not copied now."""
+        destination = next((field for field in self.fields if field.column == column), None)
+        if destination is None:
+            return []
+        return [
+            entry for entry in self.aliases.list_for_template(self.template_id)
+            if self._resolve_alias_destination(
+                entry.destination_key, entry.destination_column
+            ) == destination
+        ]
 
     def source_alias_targets(self) -> dict[tuple[str, int], str]:
         """Display each matching alias's target next to its source row."""

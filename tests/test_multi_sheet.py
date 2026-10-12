@@ -179,6 +179,43 @@ class MultiSheetTests(unittest.TestCase):
         self.assertTrue(any("претендують" in message for message in result.warnings))
         self.assertIsNone(self.session.sheet["C4"].value)
 
+    def test_multiple_aliases_per_output_column_are_listed(self):
+        """Destination context menu lists saved aliases absent from the current file."""
+        self.aliases.set(
+            self.session.template_id,
+            SourceField(1, "Основний параметр", 7, sheet=SOURCE_SHEET),
+            self.session.fields[1],
+        )
+        self.aliases.set(
+            self.session.template_id,
+            SourceField(2, "Запасна назва", 8, sheet="Склад"),
+            self.session.fields[1],
+        )
+        entries = self.session.aliases_for_destination(3)
+        self.assertEqual({(e.sheet, e.source_name) for e in entries}, {
+            (SOURCE_SHEET, "Основний параметр"), ("Склад", "Запасна назва"),
+        })
+        self.assertEqual(self.session.aliases_for_destination(1), [])
+        self.assertEqual(self.session.aliases_for_destination(2), [])
+
+    def test_ambiguous_output_titles_use_pinned_alias_column(self):
+        self.session.sheet["D3"] = "Техніка"
+        self.session.fields = [
+            DestinationField(2, "Кількість"),
+            DestinationField(3, "Техніка"),
+            DestinationField(4, "Техніка"),
+        ]
+        self.session.template_id = self.aliases.template_id(self.session.fields)
+        self.aliases.set(
+            self.session.template_id, SourceField(1, "Заготовка", 10, sheet="Склад"),
+            self.session.fields[2],
+        )
+        self.assertEqual(self.session.aliases_for_destination(3), [])
+        self.assertEqual(
+            [e.source_name for e in self.session.aliases_for_destination(4)],
+            ["Заготовка"],
+        )
+
     def test_gui_passes_sheet_with_selected_row(self):
         session = Mock()
         source = SourceField(3, "Показник", 42, sheet="Склад")
@@ -399,6 +436,8 @@ class AliasReviewTests(unittest.TestCase):
             _refresh_source_panels=Mock(),
         )
         self.app._record_has_alias = lambda record: ExcelCopyApp._record_has_alias(self.app, record)
+        self.app._alias_for_source = lambda source: ExcelCopyApp._alias_for_source(self.app, source)
+        self.app._delete_alias_entry = lambda entry: ExcelCopyApp._delete_alias_entry(self.app, entry)
         self.app._selected_copy_record = lambda: ExcelCopyApp._selected_copy_record(self.app)
         self.app._on_copied_selection = lambda: ExcelCopyApp._on_copied_selection(self.app)
         self.app._refresh_copied = lambda: ExcelCopyApp._refresh_copied(self.app)
