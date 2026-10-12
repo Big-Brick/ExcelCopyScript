@@ -114,6 +114,7 @@ class RecentDirectoriesTests(unittest.TestCase):
             _clear_tables=Mock(),
             _refresh_tables=Mock(),
             _set_source_sheets=Mock(),
+            _refresh_destination_rows=Mock(),
             _remember_directory=lambda kind, path: self.store.remember_file(kind, path),
         )
         with (
