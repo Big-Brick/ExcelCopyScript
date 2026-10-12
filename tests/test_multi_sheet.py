@@ -364,6 +364,7 @@ class AliasReviewTests(unittest.TestCase):
             session=session, aliases=self.aliases,
             copied_tree=SheetSelectorTests.FakeTree(),
             delete_alias_button=Mock(),
+            _refresh_source_panels=Mock(),
         )
         self.app._record_has_alias = lambda record: ExcelCopyApp._record_has_alias(self.app, record)
         self.app._selected_copy_record = lambda: ExcelCopyApp._selected_copy_record(self.app)
