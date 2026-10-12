@@ -213,6 +213,7 @@ class SheetSelectorTests(unittest.TestCase):
             tree=self.FakeTree(),
         )
         panel.refresh = lambda rows=None: SourceRowsPanel.refresh(panel, rows)
+        panel.set_sheets = lambda sheets: SourceRowsPanel.set_sheets(panel, sheets)
         panel._notify_selection = lambda: SourceRowsPanel._notify_selection(panel)
         return panel
 
