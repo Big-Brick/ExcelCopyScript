@@ -49,8 +49,8 @@ class DestinationOverviewTkTests(unittest.TestCase):
     def test_all_output_columns_and_provenance(self):
         tree = self.app.destination_tree
         self.assertEqual(tree.get_children(), ("2", "3", "4"))
-        self.assertEqual(tree.item("2", "tags"), ())
-        self.assertEqual(tree.item("4", "tags"), ())
+        self.assertEqual(tuple(tree.item("2", "tags")), ())
+        self.assertEqual(tuple(tree.item("4", "tags")), ())
         self.assertEqual(tree.item("3", "tags"), ("filled",))
         self.assertEqual(tree.item("3", "values"), (
             "C", "Техніка", "Склад!F8: Бронетехніка",
@@ -63,11 +63,11 @@ class DestinationOverviewTkTests(unittest.TestCase):
 
         self.app.destination_tree.selection_set("3")
         self.app.update()
-        self.assertEqual(self.app.copy_button.cget("state"), "disabled")
+        self.assertEqual(str(self.app.copy_button.cget("state")), "disabled")
 
         self.app.destination_tree.selection_set("4")
         self.app.update()
-        self.assertEqual(self.app.copy_button.cget("state"), "normal")
+        self.assertEqual(str(self.app.copy_button.cget("state")), "normal")
 
     def test_newly_copied_column_turns_green_and_shows_source(self):
         self.result.copied.append(CopyRecord(
