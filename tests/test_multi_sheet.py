@@ -151,17 +151,22 @@ class MultiSheetTests(unittest.TestCase):
 
     def test_gui_passes_sheet_with_selected_row(self):
         session = Mock()
+        source = SourceField(3, "Показник", 42, sheet="Склад")
+        session.current.unmatched_sources = [source]
         app = SimpleNamespace(
             session=session,
-            create_sources=Mock(selected_source=Mock(
-                return_value=SourceField(3, "Показник", 42, sheet="Склад"),
-            )),
+            create_sources=Mock(
+                selected_source=Mock(return_value=source),
+                source_column=Mock(return_value=3),
+            ),
             destination_tree=Mock(selection=Mock(return_value=("4",))),
             _refresh_tables=Mock(),
         )
         session.copy_manually.return_value = None
         ExcelCopyApp.copy_selected(app)
-        session.copy_manually.assert_called_once_with(3, 4, sheet="Склад")
+        session.copy_manually.assert_called_once_with(
+            3, 4, sheet="Склад", source_column=3,
+        )
 
 
 
@@ -183,6 +188,7 @@ class SheetSelectorTests(unittest.TestCase):
             self.rows = {}
             self.selected = ()
             self.counter = 0
+            self.tags = {}
 
         def get_children(self):
             return tuple(self.rows)
@@ -196,6 +202,7 @@ class SheetSelectorTests(unittest.TestCase):
             self.counter += 1
             item_id = iid or f"row{self.counter}"
             self.rows[item_id] = tuple(values)
+            self.tags[item_id] = tuple(tags)
             return item_id
 
         def selection(self):
@@ -247,6 +254,28 @@ class SheetSelectorTests(unittest.TestCase):
         self.assertEqual(review.tree.rows, {})
         self.assertEqual(review._sources_by_item_id, {})
         self.assertGreaterEqual(review._on_selection_changed.call_count, 3)
+
+    def test_all_rows_color_and_alias_target_in_frozen_column(self):
+        from excel_copy_script.source_rows_panel import SourceRowsPanel
+
+        panel = self.make_panel()
+        SourceRowsPanel.set_sheets(panel, [SOURCE_SHEET])
+        fields = [
+            SourceField(1, "", None, sheet=SOURCE_SHEET, name_valid=False),
+            SourceField(2, "Наявний аліас", None, sheet=SOURCE_SHEET,
+                        values=(None, None, 42, None, None)),
+            SourceField(3, "Звичайний", 17, sheet=SOURCE_SHEET),
+        ]
+        panel.refresh(fields, alias_targets={(SOURCE_SHEET.casefold(), 2): "D: Резерв"})
+        self.assertEqual(list(panel.tree.rows.values()), [
+            ("", 1, ""), ("D: Резерв", 2, "Наявний аліас"),
+            ("", 3, "Звичайний"),
+        ])
+        self.assertEqual(list(panel.tree.tags.values()), [
+            ("unusable",), ("aliased",), (),
+        ])
+        self.assertEqual(panel.values_tree.rows["row-2"], ("", "", "42", "", ""))
+        self.assertEqual(panel.selected_sheet.get(), SOURCE_SHEET)
 
     def test_selection_keeps_sheet_identity_and_resets_when_filtered(self):
         from excel_copy_script.source_rows_panel import SourceRowsPanel

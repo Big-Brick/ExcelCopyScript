@@ -5,6 +5,8 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+from openpyxl.utils import get_column_letter
+
 from .aliases import AliasStore
 from .models import AliasEntry, DestinationField
 
@@ -53,14 +55,15 @@ class AliasManagerDialog(tk.Toplevel):
         table_frame.pack(fill="both", expand=True)
         self.tree = ttk.Treeview(
             table_frame,
-            columns=("sheet", "source", "destination", "column"),
+            columns=("sheet", "source", "source_column", "destination", "column"),
             show="headings",
             selectmode="browse",
         )
         for column, title, width in (
             ("sheet", "Вхідний аркуш", 155),
-            ("source", "Назва у вхідному файлі", 260),
-            ("destination", "Назва у підсумковому файлі", 260),
+            ("source", "Назва у вхідному файлі", 230),
+            ("source_column", "Звідки", 75),
+            ("destination", "Назва у підсумковому файлі", 240),
             ("column", "Стовпчик", 85),
         ):
             self.tree.heading(column, text=title)
@@ -103,7 +106,8 @@ class AliasManagerDialog(tk.Toplevel):
             target_name, column = self._target_display(entry)
             item_id = self.tree.insert(
                 "", "end",
-                values=(entry.sheet, entry.source_name, target_name, column),
+                values=(entry.sheet, entry.source_name,
+                        get_column_letter(entry.source_column), target_name, column),
             )
             self._items[item_id] = entry
         self.count_label.configure(text=f"Збережено аліасів: {len(entries)}")
@@ -124,7 +128,7 @@ class AliasManagerDialog(tk.Toplevel):
             return
         entry = self._items[selection[0]]
         label = self.tree.item(selection[0], "values")
-        destination_name = label[2] if label else ""
+        destination_name = label[3] if label else ""
         if not messagebox.askyesno(
             "Підтвердження видалення",
             f"Видалити аліас «{entry.sheet}!{entry.source_name}» → «{destination_name}»?\n\n"

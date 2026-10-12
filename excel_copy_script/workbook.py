@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 
 from .aliases import AliasStore
 from .config import DESTINATION_SHEET, FIRST_DATA_ROW, FIRST_DESTINATION_COLUMN, HEADER_ROW, SOURCE_SHEET
@@ -70,47 +71,73 @@ class WorkbookSession:
             formulas = load_workbook(path, read_only=True, data_only=False)
             entries: list[SourceField] = []
             warnings: list[str] = []
-            # Process ВИСНОВКИ first, then all other worksheets. All worksheets
-            # use the same B (field name) / C (cached value) layout.
             sheet_names = [SOURCE_SHEET] + [name for name in cached.sheetnames
                                            if name != SOURCE_SHEET]
             for sheet_name in sheet_names:
                 cached_ws = cached[sheet_name]
                 formula_ws = formulas[sheet_name]
-                for row, (name, cached_value) in enumerate(
-                    cached_ws.iter_rows(min_col=2, max_col=3, values_only=True), start=1
+                cached_rows = cached_ws.iter_rows(
+                    min_col=2, max_col=7, values_only=True,
+                )
+                formula_rows = formula_ws.iter_rows(min_col=2, max_col=7)
+                for row, (cells, formula_cells) in enumerate(
+                    zip(cached_rows, formula_rows), start=1
                 ):
-                    if not isinstance(name, str) or not name.strip():
-                        continue
-                    if not nonempty(cached_value):
-                        formula_cell = formula_ws.cell(row, 3)
-                        if formula_cell.data_type == "f":
+                    raw_name = cells[0]
+                    name_valid = isinstance(raw_name, str) and bool(raw_name.strip())
+                    name = raw_name.strip() if name_valid else (
+                        "" if raw_name is None else str(raw_name)
+                    )
+                    values = tuple(cells[1:])
+                    for col, (value, formula_cell) in enumerate(
+                        zip(values, formula_cells[1:]), start=3
+                    ):
+                        if not nonempty(value) and formula_cell.data_type == "f":
                             warnings.append(
-                                f"{sheet_name}!C{row}: формула без збереженого результату — пропущено"
+                                f"{sheet_name}!{get_column_letter(col)}{row}: "
+                                "формула без збереженого результату — пропущено"
                             )
-                        continue
-                    entries.append(SourceField(row, name.strip(), cached_value, sheet=sheet_name))
+                    entries.append(SourceField(
+                        row, name, values[0], sheet=sheet_name,
+                        values=values, name_valid=name_valid,
+                    ))
             return entries, warnings, sheet_names
         finally:
             cached.close()
             if formulas is not None:
                 formulas.close()
 
-    def _destination_for(self, source: SourceField) -> tuple[DestinationField | None, str]:
+    def _destination_for(self, source: SourceField) -> tuple[DestinationField | None, str, int]:
         alias = self.aliases.get(self.template_id, source.name, source.sheet)
         if alias:
             candidates = [field for field in self.fields if field.key == alias.get("header")]
             if len(candidates) == 1:
-                return candidates[0], "Аліас"
+                return candidates[0], "Аліас", alias.get("source_column", 3)
             if len(candidates) > 1:
                 pinned = [field for field in candidates if field.column == alias.get("column")]
                 if len(pinned) == 1:
-                    return pinned[0], "Аліас"
+                    return pinned[0], "Аліас", alias.get("source_column", 3)
         if source.sheet == SOURCE_SHEET:
             exact = [field for field in self.fields if field.key == source.key]
             if len(exact) == 1:
-                return exact[0], "Збіг назви"
-        return None, ""
+                return exact[0], "Збіг назви", 3
+        return None, "", 3
+
+    def source_alias_targets(self) -> dict[tuple[str, int], str]:
+        """Display each matching alias's target next to its source row."""
+        targets = {}
+        if self.current is None:
+            return targets
+        for source in self.current.all_sources:
+            if not source.name_valid:
+                continue
+            alias = self.aliases.get(self.template_id, source.name, source.sheet)
+            if not alias:
+                continue
+            destination, method, _ = self._destination_for(source)
+            if destination is not None and method == "Аліас":
+                targets[source.location] = f"{destination.letter}: {destination.name}"
+        return targets
 
     def _write(self, row: int, records: list[CopyRecord]) -> None:
         if not records:
@@ -153,33 +180,47 @@ class WorkbookSession:
     def open_input(self, path: Path) -> ImportResult:
         source_fields, warnings, sheet_names = self._read_source(Path(path))
         target_row = self.next_empty_row()
-        duplicates = Counter((field.sheet.casefold(), field.key) for field in source_fields)
+        eligible_sources = [field for field in source_fields if field.eligible]
+        duplicates = Counter((field.sheet.casefold(), field.key) for field in eligible_sources)
         proposals: dict[int, list[CopyRecord]] = defaultdict(list)
-        for source in source_fields:
+        for source in eligible_sources:
             if duplicates[(source.sheet.casefold(), source.key)] > 1:
                 continue
-            destination, method = self._destination_for(source)
-            if destination is not None:
-                proposals[destination.column].append(CopyRecord(source, destination, method))
+            destination, method, column = self._destination_for(source)
+            if destination is None:
+                continue
+            if not 3 <= column <= 7:
+                warnings.append(f"{source.sheet}!B{source.row}: недопустимий стовпчик аліаса {column}")
+                continue
+            if not nonempty(source.value_at(column)):
+                warnings.append(
+                    f"{source.sheet}!{get_column_letter(column)}{source.row}: "
+                    "немає значення для копіювання"
+                )
+                continue
+            proposals[destination.column].append(
+                CopyRecord(source.using_column(column), destination, method)
+            )
         safe_matches = [matches[0] for matches in proposals.values() if len(matches) == 1]
         safe_matches.sort(key=lambda rec: rec.destination.column)
         self._write(target_row, safe_matches)
         result = ImportResult(filename=Path(path).name, row=target_row, copied=safe_matches,
-                              warnings=warnings, sheets=sheet_names)
+                              warnings=warnings, sheets=sheet_names, all_sources=source_fields)
         if any(count > 1 for count in duplicates.values()):
             result.warnings.append("Повторювані назви у вхідному файлі не зіставлено автоматично")
         if any(len(matches) > 1 for matches in proposals.values()):
             result.warnings.append("Кілька вхідних параметрів претендують на один стовпчик — пропущено")
         used_rows = {record.source.location for record in safe_matches}
         used_columns = {record.destination.column for record in safe_matches}
-        result.unmatched_sources = [source for source in source_fields
+        result.unmatched_sources = [source for source in eligible_sources
                                     if source.location not in used_rows]
         result.unmatched_destinations = [dest for dest in self.fields if dest.column not in used_columns]
         self.current = result
         return result
 
     def copy_manually(
-        self, source_row: int, destination_col: int, sheet: str = SOURCE_SHEET
+        self, source_row: int, destination_col: int, sheet: str = SOURCE_SHEET,
+        source_column: int = 3,
     ) -> str | None:
         result = self.current
         if result is None:
@@ -189,7 +230,11 @@ class WorkbookSession:
         destination = next((d for d in result.unmatched_destinations if d.column == destination_col), None)
         if source is None or destination is None:
             raise ValueError("Вибраний параметр уже був скопійований")
-        record = CopyRecord(source, destination, "Вручну")
+        if not nonempty(source.value_at(source_column)):
+            raise ValueError(
+                f"У комірці {sheet}!{get_column_letter(source_column)}{source_row} немає значення"
+            )
+        record = CopyRecord(source.using_column(source_column), destination, "Вручну")
         self._write(result.row, [record])
         result.copied.append(record)
         result.unmatched_sources.remove(source)

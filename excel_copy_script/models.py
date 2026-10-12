@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from openpyxl.utils import get_column_letter
 
@@ -29,6 +29,26 @@ class SourceField:
     name: str
     value: object
     sheet: str = SOURCE_SHEET
+    values: tuple[object, ...] = ()
+    name_valid: bool = True
+    value_column: int = 3
+
+    def value_at(self, column: int) -> object:
+        if not 3 <= column <= 7:
+            raise ValueError("Стовпчик значення має бути між C та G")
+        if self.values:
+            return self.values[column - 3]
+        return self.value if column == 3 else None
+
+    def using_column(self, column: int) -> "SourceField":
+        return replace(self, value=self.value_at(column), value_column=column)
+
+    @property
+    def eligible(self) -> bool:
+        from .utils import nonempty
+        return self.name_valid and bool(self.name.strip()) and any(
+            nonempty(self.value_at(col)) for col in range(3, 8)
+        )
 
     @property
     def key(self) -> str:
@@ -49,6 +69,7 @@ class AliasEntry:
     destination_key: str
     destination_column: int | None
     sheet: str = SOURCE_SHEET
+    source_column: int = 3
 
 @dataclass(frozen=True)
 class CopyRecord:
@@ -66,3 +87,4 @@ class ImportResult:
     unmatched_sources: list[SourceField] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     sheets: list[str] = field(default_factory=list)
+    all_sources: list[SourceField] = field(default_factory=list)

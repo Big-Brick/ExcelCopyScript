@@ -31,7 +31,7 @@ class AliasStore:
                 raise ValueError(f"Непідтримуваний формат файлу аліасів {self.path}: {exc}") from exc
             if migrated:
                 # Keep the exact pre-migration JSON as a one-time backup.
-                backup = self.path.with_name(self.path.name + ".v1.bak")
+                backup = self.path.with_name(self.path.name + f".v{raw['version']}.bak")
                 if not backup.exists():
                     shutil.copy2(self.path, backup)
                 self._save()
@@ -61,6 +61,7 @@ class AliasStore:
                     destination_key=record.get("header", ""),
                     destination_column=record.get("column"),
                     sheet=record.get("sheet_name") or sheet_key,
+                    source_column=record.get("source_column", 3),
                 ))
         return sorted(entries, key=lambda e: (e.sheet.casefold(), e.source_name.casefold()))
 
@@ -140,6 +141,7 @@ class AliasStore:
         mappings[source_key] = {
             "header": destination.key, "column": destination.column,
             "source_name": source.name, "sheet_name": source.sheet,
+            "source_column": source.value_column,
         }
         try:
             self._save()

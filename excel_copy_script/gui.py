@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import tkinter as tk
 from pathlib import Path
+
+from openpyxl.utils import get_column_letter
 from tkinter import filedialog, messagebox, ttk
 
 from .alias_dialog import AliasManagerDialog
@@ -12,7 +14,7 @@ from .config import FILE_TYPES
 from .models import CopyRecord
 from .recent_directories import RecentDirectories
 from .source_rows_panel import SourceRowsPanel
-from .utils import present
+from .utils import nonempty, present
 from .workbook import WorkbookSession
 
 
@@ -105,7 +107,7 @@ class ExcelCopyApp(tk.Tk):
         self.copy_button.pack(anchor="w")
         ttk.Label(
             create_tab,
-            text="Виберіть вихідний стовпчик та вхідний рядок на потрібному аркуші.",
+            text="Виберіть вихідний стовпчик, вхідний рядок і колонку значення C–G.",
             padding=(4, 0, 4, 8),
         ).pack(anchor="w")
 
@@ -134,7 +136,12 @@ class ExcelCopyApp(tk.Tk):
         can_copy = bool(
             self.session and self.session.current
             and self.destination_tree.selection()
-            and self.create_sources.selected_source() is not None
+            and (source := self.create_sources.selected_source()) is not None
+            and source.eligible
+            and source.location in {
+                row.location for row in self.session.current.unmatched_sources
+            }
+            and nonempty(source.value_at(self.create_sources.source_column()))
         )
         self.copy_button.configure(state="normal" if can_copy else "disabled")
 
@@ -154,7 +161,8 @@ class ExcelCopyApp(tk.Tk):
         alias = self.aliases.get(
             self.session.template_id, record.source.name, record.source.sheet,
         )
-        if not alias or alias.get("header") != record.destination.key:
+        if (not alias or alias.get("header") != record.destination.key
+                or alias.get("source_column", 3) != record.source.value_column):
             return False
         duplicates = sum(field.key == record.destination.key for field in self.session.fields)
         return duplicates == 1 or alias.get("column") == record.destination.column
@@ -185,6 +193,7 @@ class ExcelCopyApp(tk.Tk):
             messagebox.showerror("Помилка видалення аліаса", str(exc), parent=self)
             return
         self._refresh_copied()
+        self._refresh_source_panels()
 
     def _remember_directory(self, kind: str, filename: str) -> None:
         """Do not fail a successful file open because UI preferences cannot be saved."""
@@ -230,6 +239,7 @@ class ExcelCopyApp(tk.Tk):
         )
         self.wait_window(dialog)
         self._refresh_copied()
+        self._refresh_source_panels()
 
     def open_source(self) -> None:
         if self.session is None:
@@ -260,7 +270,7 @@ class ExcelCopyApp(tk.Tk):
         for tree in (self.copied_tree, self.destination_tree):
             tree.delete(*tree.get_children())
         for panel in (self.review_sources, self.create_sources):
-            panel.refresh([])
+            panel.refresh([], alias_targets={})
         self._on_selection()
         self._on_copied_selection()
 
@@ -275,12 +285,20 @@ class ExcelCopyApp(tk.Tk):
                 self.copied_tree.insert(
                     "", "end", iid=str(index),
                     values=(
-                        f"{record.source.sheet}!B{record.source.row}: {record.source.name}",
+                        (f"{record.source.sheet}!B{record.source.row}: {record.source.name} "
+                         f"[{get_column_letter(record.source.value_column)}{record.source.row}]"),
                         f"{record.destination.letter}: {record.destination.name}",
                         present(record.source.value), method,
                     ),
                 )
         self._on_copied_selection()
+
+    def _refresh_source_panels(self) -> None:
+        result = self.session.current if self.session is not None else None
+        rows = result.all_sources if result is not None else []
+        targets = self.session.source_alias_targets() if result is not None else {}
+        for panel in (self.review_sources, self.create_sources):
+            panel.refresh(rows, alias_targets=targets)
 
     def _refresh_tables(self) -> None:
         self._clear_tables()
@@ -292,8 +310,7 @@ class ExcelCopyApp(tk.Tk):
             self.destination_tree.insert(
                 "", "end", iid=str(dest.column), values=(dest.letter, dest.name),
             )
-        for panel in (self.review_sources, self.create_sources):
-            panel.refresh(result.unmatched_sources)
+        self._refresh_source_panels()
         self._on_selection()
         status = (
             f"{result.filename} → рядок {result.row}. Скопійовано: {len(result.copied)}; "
@@ -311,9 +328,17 @@ class ExcelCopyApp(tk.Tk):
         destinations = self.destination_tree.selection()
         if source is None or not destinations:
             return
+        if not source.eligible or source.location not in {
+            row.location for row in self.session.current.unmatched_sources
+        }:
+            messagebox.showwarning(
+                "Неможливо скопіювати", "Виберіть рядок із назвою та доступним значенням.",
+            )
+            return
         try:
             warning = self.session.copy_manually(
                 source.row, int(destinations[0]), sheet=source.sheet,
+                source_column=self.create_sources.source_column(),
             )
         except Exception as exc:
             messagebox.showerror("Помилка копіювання", str(exc))
