@@ -51,6 +51,48 @@ class AliasStore:
             ))
         return sorted(entries, key=lambda entry: entry.source_name.casefold())
 
+    def migrate_legacy_template(
+        self, legacy_id: str, current_id: str, fields: list[DestinationField]
+    ) -> None:
+        """Copy usable aliases from pre-column-A-exclusion templates.
+
+        Preserve existing mappings in the new template. A mapping that used to
+        point at the ordinal column is never eligible for migration.
+        """
+        if legacy_id == current_id:
+            return
+        templates = self.data["templates"]
+        legacy = templates.get(legacy_id)
+        if not isinstance(legacy, dict) or not legacy:
+            return
+
+        valid = {}
+        for source_key, entry in legacy.items():
+            if not isinstance(entry, dict) or entry.get("column") == 1:
+                continue
+            candidates = [field for field in fields if field.key == entry.get("header")]
+            if len(candidates) == 1 or (
+                len(candidates) > 1
+                and any(field.column == entry.get("column") for field in candidates)
+            ):
+                valid[source_key] = entry
+        if not valid:
+            return
+
+        previous = templates.get(current_id)
+        merged = {**valid, **(previous or {})}
+        if previous == merged:
+            return
+        templates[current_id] = merged
+        try:
+            self._save()
+        except Exception:
+            if previous is None:
+                del templates[current_id]
+            else:
+                templates[current_id] = previous
+            raise
+
     def delete(self, template_id: str, source_name: str) -> bool:
         """Delete one alias and persist it; restore memory state on write failure.
 

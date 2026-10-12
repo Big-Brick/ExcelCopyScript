@@ -12,7 +12,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 from .aliases import AliasStore
-from .config import DESTINATION_SHEET, FIRST_DATA_ROW, HEADER_ROW, SOURCE_SHEET
+from .config import DESTINATION_SHEET, FIRST_DATA_ROW, FIRST_DESTINATION_COLUMN, HEADER_ROW, SOURCE_SHEET
 from .models import CopyRecord, DestinationField, ImportResult, SourceField
 from .utils import nonempty, text_as_excel_value
 
@@ -25,21 +25,34 @@ class WorkbookSession:
         if DESTINATION_SHEET not in self.workbook:
             raise ValueError(f"У підсумковому файлі немає аркуша «{DESTINATION_SHEET}»")
         self.sheet = self.workbook[DESTINATION_SHEET]
-        self.fields = [DestinationField(cell.column, cell.value.strip())
-                       for cell in self.sheet[HEADER_ROW]
-                       if isinstance(cell.value, str) and cell.value.strip()]
+        header_fields = [DestinationField(cell.column, cell.value.strip())
+                         for cell in self.sheet[HEADER_ROW]
+                         if isinstance(cell.value, str) and cell.value.strip()]
+        # Column A contains a row number, not a field to import or match.
+        self.fields = [field for field in header_fields
+                       if field.column >= FIRST_DESTINATION_COLUMN]
         if not self.fields:
-            raise ValueError(f"У рядку {HEADER_ROW} немає текстових заголовків")
+            raise ValueError(
+                f"У рядку {HEADER_ROW}, починаючи зі стовпчика B, немає текстових заголовків"
+            )
         self.aliases = aliases
         self.template_id = aliases.template_id(self.fields)
+        # Older releases included column A in the alias template fingerprint.
+        # Migrate their saved mappings without ever restoring mappings to A.
+        legacy_template_id = aliases.template_id(header_fields)
+        if legacy_template_id != self.template_id:
+            aliases.migrate_legacy_template(
+                legacy_template_id, self.template_id, self.fields
+            )
         self.current: ImportResult | None = None
         self.backup_path: Path | None = None
 
     def next_empty_row(self) -> int:
-        # Consider all cells, not only mapped columns: never overwrite a partially populated row.
+        # An ordinal number in A does not make a row occupied. Still inspect
+        # every other column to avoid overwriting partially populated records.
         for row in range(FIRST_DATA_ROW, self.sheet.max_row + 1):
             if all(not nonempty(self.sheet.cell(row, col).value)
-                   for col in range(1, self.sheet.max_column + 1)):
+                   for col in range(FIRST_DESTINATION_COLUMN, self.sheet.max_column + 1)):
                 return row
         return max(FIRST_DATA_ROW, self.sheet.max_row + 1)
 
@@ -97,6 +110,8 @@ class WorkbookSession:
         before = {}
         for record in records:
             column = record.destination.column
+            if column < FIRST_DESTINATION_COLUMN:
+                raise ValueError("Стовпчик A містить порядкові номери і не призначений для імпорту")
             cell = self.sheet.cell(row, column)
             if nonempty(cell.value):
                 raise ValueError(f"Комірка {cell.coordinate} вже заповнена")
