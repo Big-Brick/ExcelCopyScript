@@ -39,7 +39,7 @@ class ProfileTests(unittest.TestCase):
                 }},
             }},
         }
-        self.home.mkdir()
+        self.home.mkdir(exist_ok=True)
         self.legacy.write_text(json.dumps(old, ensure_ascii=False), encoding="utf-8")
         original = self.legacy.read_bytes()
         profile = self.manager.load_last()
@@ -57,7 +57,7 @@ class ProfileTests(unittest.TestCase):
                 "sheet_name": "ВИСНОВКИ", "source_column": 6,
             }
         }}}}
-        self.home.mkdir()
+        self.home.mkdir(exist_ok=True)
         self.legacy.write_text(json.dumps(old, ensure_ascii=False), encoding="utf-8")
         profile = self.manager.load_last()
         self.assertEqual(profile.aliases_data["version"], 4)
@@ -65,7 +65,7 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(json.loads(self.legacy.read_text()), old)
 
     def test_invalid_legacy_migration_preserves_original_and_never_creates_empty_profile(self):
-        self.home.mkdir()
+        self.home.mkdir(exist_ok=True)
         self.legacy.write_text("{corrupt", encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "Старий файл не змінено"):
             self.manager.load_last()
@@ -73,7 +73,7 @@ class ProfileTests(unittest.TestCase):
         self.assertFalse(self.manager.default_path.exists())
 
     def test_alias_modifications_save_inside_profile_not_legacy(self):
-        self.home.mkdir()
+        self.home.mkdir(exist_ok=True)
         self.legacy.write_text('{"version": 4, "templates": {}}')
         profile = self.manager.load_last()
         from excel_copy_script.models import SourceField, DestinationField

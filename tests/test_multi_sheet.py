@@ -442,6 +442,7 @@ class AliasReviewTests(unittest.TestCase):
             template_id=self.template,
             fields=[self.destination],
             current=ImportResult(filename="report.xlsx", row=4, copied=[self.record]),
+            layout=__import__("excel_copy_script.workbook_layout", fromlist=["WorkbookLayout"]).WorkbookLayout(),
         )
         self.app = SimpleNamespace(
             session=session, aliases=self.aliases,
