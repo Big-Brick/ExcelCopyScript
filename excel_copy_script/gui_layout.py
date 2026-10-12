@@ -170,6 +170,14 @@ class LayoutPersistence:
             widget.after_idle(lambda: self.capture_sash(key, widget))
 
         widget.bind("<ButtonRelease-1>", released, add="+")
+        # The initial notebook page and an inactive page can both be unmapped
+        # when the first after_idle runs. Wait for the actual map event to
+        # restore sash positions, rather than losing the request forever.
+        widget.bind(
+            "<Map>",
+            lambda _event: widget.after_idle(lambda: self.restore_tab(tab)),
+            add="+",
+        )
 
     def capture_sash(self, key: str, widget: ttk.Panedwindow) -> None:
         try:

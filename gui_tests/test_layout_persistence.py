@@ -17,6 +17,14 @@ class LayoutPersistenceTkTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.config_path = Path(tmp.name) / "layout.json"
 
+    @staticmethod
+    def _safe_destroy(app):
+        try:
+            app.destroy()
+        except Exception:
+            # Already-destroyed Tk root (e.g. intentional restart test).
+            pass
+
     def app(self):
         with patch(
             "excel_copy_script.gui_layout.LayoutPreferences",
@@ -29,7 +37,7 @@ class LayoutPersistenceTkTests(unittest.TestCase):
 
     def test_all_six_tables_and_four_sashes_restore_on_relaunch(self):
         first = self.app()
-        self.addCleanup(lambda: first.winfo_exists() and first.destroy())
+        self.addCleanup(lambda: self._safe_destroy(first))
         first.notebook.select(1)
         first.update()
 
@@ -68,7 +76,7 @@ class LayoutPersistenceTkTests(unittest.TestCase):
         first.destroy()
 
         second = self.app()
-        self.addCleanup(lambda: second.winfo_exists() and second.destroy())
+        self.addCleanup(lambda: self._safe_destroy(second))
         # The first tab is restored as it becomes visible on startup.
         self.assertAlmostEqual(second.review_panes.sashpos(0),
                                expected.sashes["review_outer"], delta=10)
@@ -96,7 +104,7 @@ class LayoutPersistenceTkTests(unittest.TestCase):
 
     def test_user_drags_are_saved_without_closing(self):
         app = self.app()
-        self.addCleanup(lambda: app.winfo_exists() and app.destroy())
+        self.addCleanup(lambda: self._safe_destroy(app))
         app.notebook.select(1)
         app.update()
         pane = app.create_sources.divider
@@ -144,7 +152,7 @@ class LayoutPersistenceTkTests(unittest.TestCase):
         prefs.set_sash("create_outer", 710)
         prefs.set_sash("create_inner", 445)
         app = self.app()
-        self.addCleanup(lambda: app.winfo_exists() and app.destroy())
+        self.addCleanup(lambda: self._safe_destroy(app))
         self.assertFalse(app.create_panes.winfo_ismapped())
         # Repeated attempts to restore a hidden page must not reset its settings.
         app.layout.restore_tab("create")
