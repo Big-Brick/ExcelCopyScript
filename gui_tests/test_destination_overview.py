@@ -40,6 +40,9 @@ class DestinationOverviewTkTests(unittest.TestCase):
             def source_alias_targets(self):
                 return {}
 
+            def skipped_alias_destinations(self):
+                return {}
+
         self.app.session = FakeSession(self.output_fields, self.result)
         self.app.notebook.select(1)
         self.app._set_source_sheets(self.result.sheets)

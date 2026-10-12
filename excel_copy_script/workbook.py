@@ -233,6 +233,29 @@ class WorkbookSession:
             )
         return targets
 
+    def skipped_alias_destinations(self) -> dict[int, list[tuple[SourceField, str]]]:
+        """Skipped source aliases grouped by their *resolvable* output column.
+
+        Only aliases still present in the store are considered. Values copied
+        successfully (including manually) are not considered skipped. The UI
+        can therefore color destination rows without parsing display strings.
+        """
+        result = self.current
+        if result is None:
+            return {}
+        copied_locations = {record.source.location for record in result.copied}
+        grouped: dict[int, list[tuple[SourceField, str]]] = defaultdict(list)
+        for source in result.all_sources:
+            if source.location in copied_locations:
+                continue
+            reason = result.alias_issues.get(source.location)
+            if reason is None or not source.name_valid:
+                continue
+            destination, _ = self._alias_target_for(source)
+            if destination is not None:
+                grouped[destination.column].append((source, reason))
+        return dict(grouped)
+
     def _match_existing_rows(self, records: list[CopyRecord]) -> tuple[RowMatch, ...]:
         """Compare actual imported values, not names or unrelated columns."""
         if not records:

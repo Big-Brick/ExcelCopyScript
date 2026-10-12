@@ -119,6 +119,71 @@ class ImportDiagnosticsTests(unittest.TestCase):
         self.assertIn("Декілька", result.alias_issues[("висновки", 20)])
         self.assertIsNone(self.session.sheet["E4"].value)
 
+    def test_skipped_aliases_grouped_by_existing_destination_column(self):
+        self.set_alias()
+        self.set_alias(name="Конкуруючий параметр")
+        result = self.session.open_input(self.make_source(
+            second=(18, "Конкуруючий параметр", 0.66, None),
+        ))
+        self.assertEqual(len(result.alias_issues), 2)
+        skipped = self.session.skipped_alias_destinations()
+        self.assertEqual(set(skipped), {5})
+        self.assertEqual([source.row for source, _ in skipped[5]], [14, 18])
+        self.assertTrue(all("Кілька" in issue for _, issue in skipped[5]))
+
+        # Deleting a mapping must refresh the displayed state immediately:
+        # an alias that no longer exists cannot keep its yellow highlight.
+        self.aliases.delete(self.session.template_id, "Конкуруючий параметр")
+        self.assertEqual(
+            [source.row for source, _ in self.session.skipped_alias_destinations()[5]],
+            [14],
+        )
+        self.aliases.delete(self.session.template_id, PARAMETER)
+        self.assertEqual(self.session.skipped_alias_destinations(), {})
+
+    def test_empty_aliased_value_marks_destination_as_skipped(self):
+        self.set_alias(column=7)
+        self.session.open_input(self.make_source())
+        skipped = self.session.skipped_alias_destinations()
+        self.assertEqual(set(skipped), {5})
+        self.assertEqual(skipped[5][0][0].row, 14)
+        self.assertIn("колонці G", skipped[5][0][1])
+
+    def test_priority_loser_skipped_while_same_destination_is_copied(self):
+        self.set_alias()
+        self.aliases.set(
+            self.session.template_id,
+            SourceField(14, PARAMETER, 0.89), self.destination, row=14,
+        )
+        result = self.session.open_input(self.make_source(
+            second=(20, PARAMETER, 0.55, None),
+        ))
+        self.assertEqual([record.source.row for record in result.copied], [14])
+        self.assertEqual(
+            [source.row for source, _ in self.session.skipped_alias_destinations()[5]],
+            [20],
+        )
+
+    def test_missing_alias_target_is_not_marked_as_output_column(self):
+        self.aliases.set(
+            self.session.template_id,
+            SourceField(14, PARAMETER, 0.89),
+            self.destination,
+        )
+        alias = self.aliases.get(self.session.template_id, PARAMETER)
+        alias["header"] = "missing header"
+        result = self.session.open_input(self.make_source())
+        self.assertIn(("висновки", 14), result.alias_issues)
+        self.assertEqual(self.session.skipped_alias_destinations(), {})
+
+    def test_after_manual_copy_source_no_longer_counts_as_skipped(self):
+        self.set_alias(column=7)
+        result = self.session.open_input(self.make_source())
+        self.assertIn(5, self.session.skipped_alias_destinations())
+        self.session.copy_manually(14, 5, source_column=3)
+        self.assertEqual(self.session.skipped_alias_destinations(), {})
+        self.assertEqual(result.copied[0].destination.column, 5)
+
     def test_empty_aliased_cell_is_explained_even_with_other_populated_cells(self):
         self.set_alias(column=7)
         result = self.session.open_input(self.make_source())

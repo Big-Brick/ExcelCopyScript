@@ -64,13 +64,68 @@ class SkippedAliasesGuiTests(unittest.TestCase):
         self.assertEqual(self.app.create_sources.values_tree.item("row-14", "tags"), ("skipped",))
         self.assertTrue(tree.item("row-14", "values")[0].startswith("⚠ E:"))
         self.assertEqual(tree.item("row-15", "tags"), ("skipped",))
-        self.assertNotIn("filled", self.app.destination_tree.item("5", "tags"))
+        self.assertEqual(self.app.destination_tree.item("5", "tags"), ("skipped",))
+        self.assertTrue(
+            self.app.destination_tree.item("5", "values")[2].startswith(
+                "⚠ ВИСНОВКИ!B14:"
+            )
+        )
+        self.assertIn(
+            "претендують", self.app.destination_tree.item("5", "values")[2],
+        )
+        self.assertIn(
+            "(+1 інших)", self.app.destination_tree.item("5", "values")[2],
+        )
         tree.selection_set("row-14")
         self.app.update()
         message = self.app.create_sources.issue_var.get()
         self.assertIn("B14", message)
         self.assertIn("претендують", message)
         self.assertIn("пропущено аліасів: 2", self.app.status_var.get())
+
+    def test_deleting_failed_alias_updates_yellow_destination_without_reimport(self):
+        first = next(
+            entry for entry in self.aliases.list_for_template(self.session.template_id)
+            if entry.source_name == PARAMETER
+        )
+        from unittest.mock import patch
+
+        with patch("excel_copy_script.gui.messagebox.askyesno", return_value=True):
+            self.app._delete_alias_entry(first)
+        self.app.update()
+        tree = self.app.destination_tree
+        self.assertEqual(tree.item("5", "tags"), ("skipped",))
+        self.assertIn("B15", tree.item("5", "values")[2])
+        self.assertNotIn("B14", tree.item("5", "values")[2])
+        # Deleting the last failed mapping leaves the output uncolored.
+        other = self.aliases.list_for_template(self.session.template_id)[0]
+        with patch("excel_copy_script.gui.messagebox.askyesno", return_value=True):
+            self.app._delete_alias_entry(other)
+        self.app.update()
+        self.assertEqual(tuple(tree.item("5", "tags")), ())
+        self.assertEqual(tree.item("5", "values")[2], "")
+
+    def test_green_has_priority_over_failed_alias_for_same_column(self):
+        self.aliases.delete(self.session.template_id, "Конфліктний показник")
+        self.aliases.set(
+            self.session.template_id,
+            SourceField(14, PARAMETER, "89%"),
+            self.session.fields[0],
+            row=14,
+        )
+        source_path = self.session.path.parent / "source.xlsx"
+        workbook = __import__("openpyxl").load_workbook(source_path)
+        worksheet = workbook["ВИСНОВКИ"]
+        worksheet["B15"], worksheet["C15"] = PARAMETER, "15%"
+        workbook.save(source_path)
+        self.result = self.session.open_input(source_path)
+        self.app._refresh_tables()
+        self.app.update()
+        self.assertEqual(self.app.destination_tree.item("5", "tags"), ("filled",))
+        self.assertIn("B15", str(self.result.warnings))
+        self.assertEqual(
+            self.app.create_sources.tree.item("row-15", "tags"), ("skipped",),
+        )
 
     def test_only_valid_alias_turns_green_after_conflict_is_removed(self):
         self.aliases.delete(self.session.template_id, "Конфліктний показник")

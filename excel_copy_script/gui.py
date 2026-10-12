@@ -115,6 +115,7 @@ class ExcelCopyApp(tk.Tk):
             ("Колонка", "Назва", "Джерело значення"), (80, 220, 320),
         )
         self.destination_tree.tag_configure("filled", background="#ddf2df")
+        self.destination_tree.tag_configure("skipped", background="#fff0c2")
         self.create_sources = SourceRowsPanel(
             create_panes, on_selection_changed=self._on_selection,
             compact_header=True,
@@ -289,6 +290,7 @@ class ExcelCopyApp(tk.Tk):
             return
         if deleted:
             self._refresh_copied()
+            self._refresh_destination_rows()
             self._refresh_source_panels()
 
     def _popup_alias_menu(self, entries: list[AliasEntry], event) -> None:
@@ -407,6 +409,7 @@ class ExcelCopyApp(tk.Tk):
         )
         self.wait_window(dialog)
         self._refresh_copied()
+        self._refresh_destination_rows()
         self._refresh_source_panels()
 
     def open_source(self) -> None:
@@ -531,19 +534,31 @@ class ExcelCopyApp(tk.Tk):
             record.destination.column: record
             for record in result.copied
         } if result is not None else {}
+        skipped = (
+            self.session.skipped_alias_destinations() if result is not None else {}
+        )
         for destination in self.session.fields:
             record = copies.get(destination.column)
+            failures = skipped.get(destination.column, [])
             origin = ""
+            tags = ()
             if record is not None:
                 source = record.source
                 origin = (
                     f"{source.sheet}!{get_column_letter(source.value_column)}"
                     f"{source.row}: {source.name}"
                 )
+                tags = ("filled",)
+            elif failures:
+                source, reason = failures[0]
+                origin = f"⚠ {source.sheet}!B{source.row}: {reason}"
+                if len(failures) > 1:
+                    origin += f" (+{len(failures) - 1} інших)"
+                tags = ("skipped",)
             self.destination_tree.insert(
                 "", "end", iid=str(destination.column),
                 values=(destination.letter, destination.name, origin),
-                tags=("filled",) if record is not None else (),
+                tags=tags,
             )
         self._on_selection()
 
