@@ -49,6 +49,7 @@ class DestinationOverviewTkTests(unittest.TestCase):
                 return {}
 
         self.app.session = FakeSession(self.output_fields, self.result)
+        self.app.aliases = None  # FakeSession has no real template/alias store.
         self.app.notebook.select(1)
         self.app._set_source_sheets(self.result.sheets)
         self.app._refresh_tables()
