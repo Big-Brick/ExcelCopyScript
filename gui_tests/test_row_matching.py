@@ -47,7 +47,7 @@ class ChooseOutputRowGuiTests(unittest.TestCase):
     def open_summary(self, clear=False):
         self.app.clear_rows_var.set(clear)
         with (
-            patch("excel_copy_script.gui.AliasStore", return_value=self.aliases),
+            patch("excel_copy_script.gui.AliasStore.from_profile", return_value=self.aliases),
             patch("excel_copy_script.gui.filedialog.askopenfilename",
                   return_value=str(self.summary)),
         ):

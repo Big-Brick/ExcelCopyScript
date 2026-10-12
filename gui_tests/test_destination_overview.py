@@ -40,6 +40,11 @@ class DestinationOverviewTkTests(unittest.TestCase):
             def source_alias_targets(self):
                 return {}
 
+            @property
+            def layout(self):
+                from excel_copy_script.workbook_layout import WorkbookLayout
+                return WorkbookLayout()
+
             def skipped_alias_destinations(self):
                 return {}
 

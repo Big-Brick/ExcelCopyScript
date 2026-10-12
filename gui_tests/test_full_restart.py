@@ -55,7 +55,7 @@ class FullRestartGuiTests(unittest.TestCase):
         # The earlier restart tests explicitly exercise the legacy clear mode.
         self.app.clear_rows_var.set(True)
         with (
-            patch("excel_copy_script.gui.AliasStore", return_value=self.aliases),
+            patch("excel_copy_script.gui.AliasStore.from_profile", return_value=self.aliases),
             patch("excel_copy_script.gui.filedialog.askopenfilename",
                   side_effect=[str(self.summary), str(self.source_a), str(self.source_b)]),
         ):
@@ -138,7 +138,7 @@ class FullRestartGuiTests(unittest.TestCase):
         with patch(
             "excel_copy_script.gui.filedialog.askopenfilename",
             return_value=str(self.summary),
-        ), patch("excel_copy_script.gui.AliasStore", return_value=self.aliases):
+        ), patch("excel_copy_script.gui.AliasStore.from_profile", return_value=self.aliases):
             self.app.open_destination()
         self.assertEqual(self.app.opened_sources, [])
         self.assertEqual(str(self.app.restart_button["state"]), "normal")
