@@ -240,7 +240,7 @@ class WorkbookSession:
         result.unmatched_sources.remove(source)
         result.unmatched_destinations.remove(destination)
         try:
-            self.aliases.set(self.template_id, source, destination)
+            self.aliases.set(self.template_id, record.source, destination)
         except (OSError, ValueError) as exc:
             return f"Значення скопійовано, але аліас не збережено: {exc}"
         return None

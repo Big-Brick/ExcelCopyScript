@@ -28,11 +28,12 @@ def migrate_alias_data(raw: dict) -> tuple[dict, bool]:
         if not isinstance(templates, dict):
             raise ValueError("Пошкоджений шаблон аліасів")
         if version == 1:
-            templates = {normalize(SOURCE_SHEET): {
-                key: {**value, "sheet_name": SOURCE_SHEET}
-                for key, value in templates.items()
-                if isinstance(value, dict)
-            }}
+            converted = {}
+            for key, value in templates.items():
+                if not isinstance(value, dict):
+                    raise ValueError("Пошкоджений запис аліаса")
+                converted[key] = {**value, "sheet_name": SOURCE_SHEET}
+            templates = {normalize(SOURCE_SHEET): converted}
         migrated_sheets = {}
         for sheet_key, records in templates.items():
             if not isinstance(records, dict):

@@ -122,7 +122,9 @@ class SourceRowsPanel(ttk.Frame):
                 other.selection_set(items[0])
                 other.see(items[0])
             else:
-                other.selection_remove(*other.selection())
+                previous = other.selection()
+                if previous:
+                    other.selection_remove(*previous)
         finally:
             self._syncing_selection = False
         self._notify_selection()

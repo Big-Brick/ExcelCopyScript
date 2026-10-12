@@ -198,7 +198,7 @@ class SheetSelectorTests(unittest.TestCase):
                 self.rows.pop(item, None)
             self.selected = ()
 
-        def insert(self, _parent, _position, values, iid=None):
+        def insert(self, _parent, _position, values, iid=None, tags=()):
             self.counter += 1
             item_id = iid or f"row{self.counter}"
             self.rows[item_id] = tuple(values)
@@ -214,12 +214,18 @@ class SheetSelectorTests(unittest.TestCase):
         panel = SimpleNamespace(
             _rows=[],
             _sources_by_item_id={},
+            _alias_targets={},
             _on_selection_changed=Mock(),
             selected_sheet=self.FakeVar(),
+            selected_value_column=self.FakeVar(),
             sheet_combo=Mock(),
             tree=self.FakeTree(),
+            values_tree=self.FakeTree(),
+            COLUMNS=tuple(range(3, 8)),
         )
-        panel.refresh = lambda rows=None: SourceRowsPanel.refresh(panel, rows)
+        panel.refresh = lambda rows=None, alias_targets=None: SourceRowsPanel.refresh(
+            panel, rows, alias_targets=alias_targets
+        )
         panel.set_sheets = lambda sheets: SourceRowsPanel.set_sheets(panel, sheets)
         panel._notify_selection = lambda: SourceRowsPanel._notify_selection(panel)
         return panel
@@ -237,7 +243,8 @@ class SheetSelectorTests(unittest.TestCase):
             SourceRowsPanel.set_sheets(panel, [SOURCE_SHEET, "Склад", "Порожній"])
             panel.refresh(fields)
             self.assertEqual(panel.selected_sheet.get(), SOURCE_SHEET)
-            self.assertEqual(list(panel.tree.rows.values()), [(2, "Перший", "11")])
+            self.assertEqual(list(panel.tree.rows.values()), [("", 2, "Перший")])
+            self.assertEqual(next(iter(panel.values_tree.rows.values()))[0], "11")
             panel.sheet_combo.configure.assert_called_with(
                 values=[SOURCE_SHEET, "Склад", "Порожній"], state="readonly",
             )
@@ -245,9 +252,9 @@ class SheetSelectorTests(unittest.TestCase):
         review.selected_sheet.set("Склад")
         SourceRowsPanel._on_sheet_changed(review)
         self.assertEqual(list(review.tree.rows.values()), [
-            (2, "Другий", "22"), (3, "Третій", "33"),
+            ("", 2, "Другий"), ("", 3, "Третій"),
         ])
-        self.assertEqual(list(create.tree.rows.values()), [(2, "Перший", "11")])
+        self.assertEqual(list(create.tree.rows.values()), [("", 2, "Перший")])
 
         review.selected_sheet.set("Порожній")
         SourceRowsPanel._on_sheet_changed(review)
@@ -319,7 +326,9 @@ class SheetSelectorTests(unittest.TestCase):
         source = SourceField(8, "Дані", 77, sheet="Склад")
         review.selected_source = Mock(return_value=SourceField(1, "Непотрібне", 1))
         create.selected_source = Mock(return_value=source)
+        create.source_column = Mock(return_value=5)
         session = Mock()
+        session.current.unmatched_sources = [source]
         session.copy_manually.return_value = None
         app = SimpleNamespace(
             session=session, create_sources=create, review_sources=review,
@@ -327,7 +336,7 @@ class SheetSelectorTests(unittest.TestCase):
             _refresh_tables=Mock(),
         )
         ExcelCopyApp.copy_selected(app)
-        session.copy_manually.assert_called_once_with(8, 3, sheet="Склад")
+        session.copy_manually.assert_called_once_with(8, 3, sheet="Склад", source_column=5)
         review.selected_source.assert_not_called()
 
 
@@ -421,14 +430,14 @@ class AliasMigrationTests(unittest.TestCase):
         encoded = json.dumps(original, ensure_ascii=False)
         self.path.write_text(encoded, encoding="utf-8")
         store = AliasStore(self.path)
-        self.assertEqual(store.data["version"], 2)
+        self.assertEqual(store.data["version"], 3)
         self.assertEqual(store.get("template-1", "Кількість", SOURCE_SHEET)["column"], 2)
         self.assertIsNone(store.get("template-1", "Кількість", "Склад"))
         self.assertEqual(store.get("template-2", "Інша назва", SOURCE_SHEET)["column"], 3)
         self.assertEqual(store.list_for_template("template-1")[0].sheet, SOURCE_SHEET)
         backup = self.directory / "aliases.json.v1.bak"
         self.assertEqual(backup.read_text(encoding="utf-8"), encoded)
-        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["version"], 2)
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["version"], 3)
         AliasStore(self.path)
         self.assertEqual(backup.read_text(encoding="utf-8"), encoded)
 
@@ -458,7 +467,7 @@ class AliasMigrationTests(unittest.TestCase):
         self.assertIsNone(restarted.aliases.get(current_id, "Нове ім’я", SOURCE_SHEET))
 
     def test_invalid_schema_is_rejected_without_overwriting(self):
-        text = '{"version": 3, "templates": {}}'
+        text = '{"version": 4, "templates": {}}'
         self.path.write_text(text, encoding="utf-8")
         with self.assertRaises(ValueError):
             AliasStore(self.path)
