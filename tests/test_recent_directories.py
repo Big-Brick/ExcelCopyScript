@@ -100,7 +100,7 @@ class RecentDirectoriesTests(unittest.TestCase):
         session = SimpleNamespace(
             path=destination_path, fields=[object()],
             next_empty_row=lambda: 4,
-            open_input=lambda _: SimpleNamespace(row=4),
+            open_input=lambda _: SimpleNamespace(row=4, sheets=["ВИСНОВКИ"]),
         )
         app = SimpleNamespace(
             recent_directories=self.store,
