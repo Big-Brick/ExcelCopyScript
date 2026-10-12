@@ -17,12 +17,14 @@ class PackageTests(unittest.TestCase):
         self.assertIs(legacy_normalize, normalize)
 
     def test_gui_entry_points_import_without_creating_window(self):
+        from excel_copy_script.alias_dialog import AliasManagerDialog
         from excel_copy_script.gui import ExcelCopyApp, main
         from excel_copy_script import __main__ as package_main
 
         self.assertTrue(callable(main))
         self.assertIs(package_main.main, main)
         self.assertTrue(issubclass(ExcelCopyApp, __import__("tkinter").Tk))
+        self.assertTrue(issubclass(AliasManagerDialog, __import__("tkinter").Toplevel))
 
 
 if __name__ == "__main__":

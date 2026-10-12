@@ -115,6 +115,79 @@ class TransferTests(unittest.TestCase):
         wb = load_workbook(self.target)
         self.assertNotEqual(wb["Дані_підрозділів"]["C5"].data_type, "f")
 
+    def test_alias_listing_and_deletion_are_persistent(self):
+        source = self.source("aliases.xlsx", [(1, "Бронетехніка", 17)])
+        self.session.open_input(source)
+        self.session.copy_manually(1, 3)
+
+        template_id = self.session.template_id
+        entries = self.aliases.list_for_template(template_id)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].source_name, "Бронетехніка")
+        self.assertEqual(entries[0].source_key, normalize("Бронетехніка"))
+        self.assertEqual(entries[0].destination_key, normalize("Техніка"))
+        self.assertEqual(entries[0].destination_column, 3)
+
+        self.assertTrue(self.aliases.delete(template_id, " БРОНЕТЕХНІКА "))
+        self.assertFalse(self.aliases.delete(template_id, "Бронетехніка"))
+        self.assertEqual(self.aliases.list_for_template(template_id), [])
+        reloaded = AliasStore(self.aliases.path)
+        self.assertEqual(reloaded.list_for_template(template_id), [])
+        self.assertIsNone(reloaded.get(template_id, "Бронетехніка"))
+
+        next_file = self.source("next.xlsx", [(3, "Бронетехніка", 10)])
+        next_result = self.session.open_input(next_file)
+        self.assertFalse(next_result.copied)
+        self.assertEqual([field.name for field in next_result.unmatched_sources],
+                         ["Бронетехніка"])
+        # Removing an alias must not modify the already copied value.
+        self.assertEqual(load_workbook(self.target)["Дані_підрозділів"]["C5"].value, 17)
+
+    def test_deleting_one_alias_does_not_remove_other_aliases_or_templates(self):
+        template_id = self.session.template_id
+        source = self.source("many.xlsx", [(1, "Бронетехніка", 10), (2, "Бійці", 20)])
+        self.session.open_input(source)
+        self.session.copy_manually(1, 3)
+        self.session.copy_manually(2, 2)
+        self.aliases.set("other-template",
+                         type("S", (), {"key": normalize("Альтернативна назва"), "name": "Альтернативна назва"})(),
+                         self.session.fields[2])
+        self.assertTrue(self.aliases.delete(template_id, "Бронетехніка"))
+        self.assertIsNotNone(self.aliases.get(template_id, "Бійці"))
+        self.assertIsNotNone(self.aliases.get("other-template", "Альтернативна назва"))
+
+        reloaded = AliasStore(self.aliases.path)
+        self.assertEqual(len(reloaded.list_for_template(template_id)), 1)
+        self.assertEqual(len(reloaded.list_for_template("other-template")), 1)
+
+    def test_delete_rolls_back_on_save_failure(self):
+        from unittest.mock import patch
+
+        template_id = self.session.template_id
+        self.aliases.set(template_id,
+                         type("S", (), {"key": normalize("Бронетехніка"), "name": "Бронетехніка"})(),
+                         self.session.fields[2])
+        with patch.object(self.aliases, "_save", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                self.aliases.delete(template_id, "Бронетехніка")
+        self.assertIsNotNone(self.aliases.get(template_id, "Бронетехніка"))
+        self.assertIsNotNone(AliasStore(self.aliases.path).get(template_id, "Бронетехніка"))
+
+    def test_legacy_aliases_can_be_listed_and_deleted(self):
+        import json
+
+        template_id = self.session.template_id
+        self.aliases.path.parent.mkdir(parents=True, exist_ok=True)
+        self.aliases.path.write_text(json.dumps({"version": 1, "templates": {
+            template_id: {"бронетехніка": {"header": "техніка", "column": 3}}
+        }}, ensure_ascii=False), encoding="utf-8")
+        legacy = AliasStore(self.aliases.path)
+        entries = legacy.list_for_template(template_id)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].source_name, "бронетехніка")
+        self.assertTrue(legacy.delete(template_id, "БРОНЕТЕХНІКА"))
+        self.assertEqual(AliasStore(self.aliases.path).list_for_template(template_id), [])
+
     def test_bad_alias_file_fails_loudly(self):
         self.aliases.path.parent.mkdir(parents=True, exist_ok=True)
         self.aliases.path.write_text("not json", encoding="utf-8")

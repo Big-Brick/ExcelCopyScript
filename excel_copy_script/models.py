@@ -33,6 +33,16 @@ class SourceField:
         return normalize(self.name)
 
 
+
+@dataclass(frozen=True)
+class AliasEntry:
+    """Displayable alias mapping, including aliases created by older versions."""
+
+    source_key: str
+    source_name: str
+    destination_key: str
+    destination_column: int | None
+
 @dataclass(frozen=True)
 class CopyRecord:
     source: SourceField

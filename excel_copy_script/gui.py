@@ -6,6 +6,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+from .alias_dialog import AliasManagerDialog
 from .aliases import AliasStore
 from .config import FILE_TYPES
 from .utils import present
@@ -31,6 +32,11 @@ class ExcelCopyApp(tk.Tk):
         self.source_button = ttk.Button(top, text="2. Відкрити вхідний / наступний файл",
                                         command=self.open_source, state="disabled")
         self.source_button.pack(side="left", padx=(12, 0))
+        self.alias_button = ttk.Button(
+            top, text="Керувати аліасами", command=self.open_alias_manager,
+            state="disabled",
+        )
+        self.alias_button.pack(side="left", padx=(12, 0))
         ttk.Label(self, textvariable=self.destination_var, padding=(12, 0)).pack(anchor="w")
         ttk.Label(self, textvariable=self.source_var, padding=(12, 2)).pack(anchor="w")
 
@@ -90,8 +96,16 @@ class ExcelCopyApp(tk.Tk):
         self.destination_var.set(f"Підсумковий: {session.path}")
         self.source_var.set("Вхідний файл не вибрано")
         self.source_button.configure(state="normal")
+        self.alias_button.configure(state="normal")
         self._clear_tables()
         self.status_var.set(f"Знайдено {len(session.fields)} стовпчиків. Наступний рядок: {session.next_empty_row()}.")
+
+    def open_alias_manager(self):
+        if self.session is None or self.aliases is None:
+            return
+        AliasManagerDialog(
+            self, self.aliases, self.session.template_id, self.session.fields,
+        )
 
     def open_source(self):
         if self.session is None:

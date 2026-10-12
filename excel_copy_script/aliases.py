@@ -8,7 +8,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from .models import DestinationField, SourceField
+from .models import AliasEntry, DestinationField, SourceField
 from .utils import normalize
 
 class AliasStore:
@@ -36,11 +36,50 @@ class AliasStore:
         entry = self.data["templates"].get(template_id, {}).get(normalize(source_name))
         return entry if isinstance(entry, dict) else None
 
+    def list_for_template(self, template_id: str) -> list[AliasEntry]:
+        """Return stored aliases for a destination template, including legacy records."""
+        template = self.data["templates"].get(template_id, {})
+        entries = []
+        for key, value in template.items():
+            if not isinstance(value, dict):
+                continue
+            entries.append(AliasEntry(
+                source_key=key,
+                source_name=value.get("source_name") or key,
+                destination_key=value.get("header", ""),
+                destination_column=value.get("column"),
+            ))
+        return sorted(entries, key=lambda entry: entry.source_name.casefold())
+
+    def delete(self, template_id: str, source_name: str) -> bool:
+        """Delete one alias and persist it; restore memory state on write failure.
+
+        Returns False when the alias doesn't exist (no file write).
+        """
+        key = normalize(source_name)
+        template = self.data["templates"].get(template_id)
+        if template is None or key not in template:
+            return False
+
+        removed = template.pop(key)
+        empty = not template
+        if empty:
+            del self.data["templates"][template_id]
+        try:
+            self._save()
+        except Exception:
+            if empty:
+                self.data["templates"][template_id] = template
+            template[key] = removed
+            raise
+        return True
+
     def set(self, template_id: str, source: SourceField, destination: DestinationField) -> None:
         key = source.key
         template = self.data["templates"].setdefault(template_id, {})
         previous = template.get(key)
-        template[key] = {"header": destination.key, "column": destination.column}
+        template[key] = {"header": destination.key, "column": destination.column,
+                         "source_name": source.name if hasattr(source, "name") else key}
         try:
             self._save()
         except Exception:
