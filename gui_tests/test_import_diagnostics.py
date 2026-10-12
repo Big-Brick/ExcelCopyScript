@@ -85,7 +85,7 @@ class SkippedAliasesGuiTests(unittest.TestCase):
         self.app.update()
         self.assertEqual(len(result.copied), 1)
         self.assertEqual(self.app.create_sources.tree.item("row-14", "tags"), ("aliased",))
-        self.assertEqual(self.app.create_sources.tree.item("row-15", "tags"), ())
+        self.assertEqual(tuple(self.app.create_sources.tree.item("row-15", "tags")), ())
         self.assertEqual(self.app.destination_tree.item("5", "tags"), ("filled",))
         self.assertEqual(self.session.sheet["E4"].value, "89%")
 
